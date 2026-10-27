@@ -187,3 +187,65 @@ func TestAuditWithLiveOfficial(t *testing.T) {
 		t.Fatalf("same tokenizer with different overheads must normalize to zero divergence, got %v", div["mean_abs_diff"])
 	}
 }
+
+func stubStdin(t *testing.T, tty bool, input string) {
+	t.Helper()
+	oldReader, oldTTY := stdinReader, stdinIsTTY
+	stdinReader = strings.NewReader(input)
+	stdinIsTTY = func() bool { return tty }
+	t.Cleanup(func() { stdinReader, stdinIsTTY = oldReader, oldTTY })
+}
+
+func TestNoArgsNonTTYShowsUsage(t *testing.T) {
+	cleanEnv(t)
+	stubStdin(t, false, "")
+	code, _, errOut := runCLI(t)
+	if code != exitError || !strings.Contains(errOut, "guided mode") {
+		t.Fatalf("code %d stderr %q", code, errOut)
+	}
+}
+
+func TestWizardMissingKeyStopsBeforeSending(t *testing.T) {
+	cleanEnv(t)
+	stubStdin(t, true, "1\nhttps://provider.example\nmodel-x\nn\n")
+	code, out, _ := runCLI(t)
+	if code != exitError {
+		t.Fatalf("code %d out %q", code, out)
+	}
+	if !strings.Contains(out, "export XLFP_API_KEY") || !strings.Contains(out, "Nothing was sent") {
+		t.Fatalf("out %q", out)
+	}
+}
+
+func TestWizardUncoverLoopbackEndToEnd(t *testing.T) {
+	cleanEnv(t)
+	srv := openAIStyleMock(t, "deepseek-v3", 6)
+	// Loopback endpoints need no key prompt; blank line accepts the confirm.
+	stubStdin(t, true, "1\n"+srv.URL+"\nstealth-x\n\n")
+	code, out, _ := runCLI(t)
+	if code != exitOK || !strings.Contains(out, "IDENTIFIED") || !strings.Contains(out, "DeepSeek") {
+		t.Fatalf("code %d out %q", code, out)
+	}
+}
+
+func TestWizardDeclineAtConfirm(t *testing.T) {
+	cleanEnv(t)
+	srv := openAIStyleMock(t, "deepseek-v3", 6)
+	stubStdin(t, true, "1\n"+srv.URL+"\nstealth-x\nn\n")
+	code, out, _ := runCLI(t)
+	if code != exitError || !strings.Contains(out, "Nothing was sent") || strings.Contains(out, "IDENTIFIED") {
+		t.Fatalf("code %d out %q", code, out)
+	}
+}
+
+func TestExplainAndHints(t *testing.T) {
+	cleanEnv(t)
+	code, out, _ := runCLI(t, "explain")
+	if code != exitOK || !strings.Contains(out, "plain words") || !strings.Contains(out, "INCONCLUSIVE") {
+		t.Fatalf("explain: code %d out %q", code, out)
+	}
+	code, _, errOut := runCLI(t, "uncover", "--model", "x")
+	if code != exitError || !strings.Contains(errOut, "Fix:") || !strings.Contains(errOut, "--endpoint") {
+		t.Fatalf("hint: code %d stderr %q", code, errOut)
+	}
+}

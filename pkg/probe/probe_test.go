@@ -415,3 +415,23 @@ func TestFingerprintSpecialRejection(t *testing.T) {
 		t.Fatalf("got %s/%q reason %q", res.Status, res.TopFamily, res.Reason)
 	}
 }
+
+func TestFingerprintOnProbeReportsSpent(t *testing.T) {
+	var seen []int
+	res, calls, err := runFingerprint(t, config.TransportOpenAI, "deepseek-v3", 6, mockOpts{},
+		Options{OnProbe: func(n int) { seen = append(seen, n) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) == 0 {
+		t.Fatal("OnProbe was never called")
+	}
+	for i := 1; i < len(seen); i++ {
+		if seen[i] <= seen[i-1] {
+			t.Fatalf("reported spent not strictly increasing: %v", seen)
+		}
+	}
+	if seen[len(seen)-1] != res.RequestsSpent || res.RequestsSpent != int(*calls) {
+		t.Fatalf("last OnProbe %d, RequestsSpent %d, server calls %d", seen[len(seen)-1], res.RequestsSpent, *calls)
+	}
+}

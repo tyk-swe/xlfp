@@ -33,30 +33,141 @@ const (
 	exitMismatch     = 3 // audit: mismatch
 )
 
-const usage = `xlfp — xo llm fingerprinter
+const usage = `xlfp — find out which AI model family is really behind an endpoint
+
+New here? Just run ` + "`xlfp`" + ` in a terminal and answer the questions.
 
 Usage:
+  xlfp                                      guided mode (in a terminal)
   xlfp uncover --endpoint URL --model NAME [flags]
-  xlfp audit --target-url URL --model NAME --claim FAMILY [--official-url URL] [flags]
+  xlfp audit --target-url URL --model NAME [--claim FAMILY] [--official-url URL] [flags]
   xlfp families [--json]
+  xlfp explain
   xlfp version
 
-Uncover ranks the likely model family of an endpoint from its reported
-token usage, or returns inconclusive. Audit checks a target endpoint
-against a claimed family and, optionally, a live official endpoint.
-Audit detects family substitution; it does not prove quantization or
-degradation of a same-family backend.
+uncover answers "which family is this endpoint, really?" with a ranked
+answer or an honest "inconclusive". audit answers "is this provider
+really serving the family it claims?" with MATCH, MISMATCH, or
+INCONCLUSIVE. Both work by comparing how the endpoint counts tokens
+against known families; neither can prove an exact model version.
 
-API keys come from the environment or a config file only (env wins).
-There is no literal key flag. See README.md for the config format.
+API keys: xlfp never takes a key as a flag value. For unknown endpoints
+set XLFP_API_KEY in your environment first. Provider keys such as
+OPENAI_API_KEY are only ever sent to that provider's official address.
 
 Exit codes: 0 identified/match, 1 error, 2 inconclusive, 3 audit mismatch.
+Run ` + "`xlfp explain`" + ` for a plain-words guide, or ` + "`xlfp uncover --help`" + ` for examples.
+`
+
+const uncoverHelp = `xlfp uncover — find out which model family an endpoint really is
+
+Example:
+  export XLFP_API_KEY='the key for that endpoint'
+  xlfp uncover --endpoint https://provider.example --model stealth-model-x
+
+Sends up to --max-requests (default 12) tiny test requests and matches
+the reported token counts against known families. The endpoint may be a
+bare host, a /v1-style base, or a full request URL. Add --verbose for
+technical evidence, --json for scripts and agents.
+
+Flags:
+`
+
+const auditHelp = `xlfp audit — check whether a provider really serves the family it claims
+
+Examples:
+  export XLFP_API_KEY='the key for that provider'
+  xlfp audit --target-url https://provider.example --model deepseek-chat --claim deepseek
+
+  # Stronger: also probe the official API in the same run as a baseline.
+  xlfp audit --target-url https://provider.example --official-url https://api.deepseek.com \
+      --model deepseek-chat --claim deepseek
+
+--claim is guessed from the model name when omitted. Verdicts: MATCH,
+MISMATCH, or INCONCLUSIVE (exit codes 0, 3, 2). A MISMATCH is strong
+token-count evidence of a different family, not by itself proof of
+fraud. Add --verbose for technical evidence, --json for scripts.
+
+Flags:
+`
+
+const explainText = `xlfp in plain words
+
+What it does
+  Every AI model splits text into chunks called tokens before reading
+  it, and each model family (DeepSeek, Qwen, OpenAI, ...) splits text
+  differently. xlfp sends a few tiny messages to an endpoint, looks at
+  how many tokens the endpoint says each one was, and matches that
+  pattern against the families it knows.
+
+Words you will see
+  family        A group of models sharing one text-splitter (tokenizer).
+  IDENTIFIED    The counts match one family strongly.
+  INCONCLUSIVE  Not enough trustworthy evidence to say. This is a normal,
+                honest outcome — xlfp would rather say "can't tell" than guess.
+  MATCH         (audit) The endpoint counts like the claimed family.
+  MISMATCH      (audit) The endpoint counts like a different family.
+  confidence    How strongly the counts favor the top family over the rest.
+
+What xlfp cannot do
+  - Prove an exact model version or checkpoint. Families only.
+  - Detect a secretly smaller/weaker model of the same family.
+  - Separate Qwen from MiMo: they ship the identical tokenizer.
+  - Give verdicts for Google/Claude yet: their tokenizers are not
+    public, so they appear as scored hints, never verdicts.
+  - Work at all when a provider fakes its token-count numbers.
+    That stays inconclusive, by design.
+
+Costs and safety
+  - Each check sends up to --max-requests (default 12) tiny, normally
+    billable requests per endpoint. Only probe endpoints you are
+    authorized to test, and remember the provider can see the requests.
+  - API keys come from your environment or config only, never from a
+    flag. Use XLFP_API_KEY for unknown endpoints; keys like
+    OPENAI_API_KEY are sent only to that provider's official address,
+    so probing a stranger's endpoint can never leak them.
 `
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
+// stdinReader and stdinIsTTY gate the interactive wizard. They are
+// variables so tests can drive the wizard with scripted input. The
+// wizard only ever starts on a real terminal: piped/scripted/agent
+// invocations with no arguments keep the plain usage error.
+var (
+	stdinReader io.Reader = os.Stdin
+	stdinIsTTY            = func() bool { return writerIsTTY(os.Stdin) }
+)
+
+// writerIsTTY reports whether w is a terminal (character device file).
+func writerIsTTY(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// probeProgress returns an OnProbe callback that shows a one-line
+// progress counter on a terminal, plus a finish func that clears it.
+// Off-terminal (pipes, files, agent captures) it stays silent.
+func probeProgress(stderr io.Writer, enabled bool, label string) (func(int), func()) {
+	if !enabled || !writerIsTTY(stderr) {
+		return nil, func() {}
+	}
+	return func(n int) {
+			fmt.Fprintf(stderr, "\rProbing %s: %d request(s) sent...  ", label, n)
+		}, func() {
+			fmt.Fprintf(stderr, "\r%s\r", strings.Repeat(" ", 48))
+		}
+}
+
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
+		if stdinIsTTY() {
+			return runWizard(stdinReader, stdout, stderr)
+		}
 		fmt.Fprint(stderr, usage)
 		return exitError
 	}
@@ -67,6 +178,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdAudit(args[1:], stdout, stderr)
 	case "families":
 		return cmdFamilies(args[1:], stdout, stderr)
+	case "explain":
+		return cmdExplain(args[1:], stdout, stderr)
 	case "version", "--version", "-version", "-v":
 		dbv := "?"
 		if db, err := fingerprint.Load(); err == nil {
@@ -86,6 +199,39 @@ func run(args []string, stdout, stderr io.Writer) int {
 func fail(stderr io.Writer, err error) int {
 	fmt.Fprintf(stderr, "xlfp: %v\n", err)
 	return exitError
+}
+
+// failWithHint is fail plus a beginner-actionable "Fix:" line for the
+// common setup mistakes (missing endpoint/model/key/claim).
+func failWithHint(stderr io.Writer, err error) int {
+	fmt.Fprintf(stderr, "xlfp: %v\n", err)
+	if h := hintFor(err); h != "" {
+		fmt.Fprintf(stderr, "Fix: %s\n", h)
+	}
+	return exitError
+}
+
+func hintFor(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "no endpoint:"):
+		return "pass the API address, e.g. --endpoint https://provider.example — or run `xlfp` in a terminal for guided mode"
+	case strings.Contains(msg, "no model:"):
+		return "pass the model name exactly as the provider calls it, e.g. --model deepseek-chat"
+	case strings.Contains(msg, "is empty or unset"):
+		return "set it first, e.g. export XLFP_API_KEY='your-key' (xlfp never takes a key as a flag value)"
+	case strings.Contains(msg, "claimed family"), strings.Contains(msg, "cannot infer"):
+		return "pass a family name like deepseek or qwen; `xlfp families` lists what this build knows"
+	}
+	return ""
+}
+
+func cmdExplain(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] != "-h" && args[0] != "--help" && args[0] != "help" {
+		return fail(stderr, fmt.Errorf("unexpected arguments: %s", strings.Join(args, " ")))
+	}
+	fmt.Fprint(stdout, explainText)
+	return exitOK
 }
 
 func writeJSON(w io.Writer, v any) error {
@@ -143,6 +289,7 @@ type uncoverOutput struct {
 func cmdUncover(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("uncover", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	fs.Usage = func() { fmt.Fprint(stderr, uncoverHelp); fs.PrintDefaults() }
 	var ef endpointFlags
 	var cf commonFlags
 	fs.StringVar(&ef.endpoint, "endpoint", "", "endpoint base URL (host, /v1 base, or full request URL)")
@@ -179,11 +326,13 @@ func cmdUncover(args []string, stdout, stderr io.Writer) int {
 	}
 	client, spec, err := resolveClient(cfg, ef, "", cf.timeout)
 	if err != nil {
-		return fail(stderr, err)
+		return failWithHint(stderr, err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	res, err := probe.Fingerprint(ctx, client, db, probe.Options{MaxRequests: cf.maxRequests, MinConfidence: cf.minConfidence})
+	onProbe, done := probeProgress(stderr, !cf.jsonOut || cf.verbose, "endpoint")
+	res, err := probe.Fingerprint(ctx, client, db, probe.Options{MaxRequests: cf.maxRequests, MinConfidence: cf.minConfidence, OnProbe: onProbe})
+	done()
 	if err != nil {
 		return fail(stderr, err)
 	}
@@ -204,6 +353,10 @@ func cmdUncover(args []string, stdout, stderr io.Writer) int {
 func cmdFamilies(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("families", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	fs.Usage = func() {
+		fmt.Fprint(stderr, "xlfp families — list the model families this build can recognize\n\nFlags:\n")
+		fs.PrintDefaults()
+	}
 	jsonOut := fs.Bool("json", false, "emit JSON")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -241,6 +394,7 @@ type auditOutput struct {
 func cmdAudit(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("audit", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	fs.Usage = func() { fmt.Fprint(stderr, auditHelp); fs.PrintDefaults() }
 	var target, official endpointFlags
 	var bothTransport, bothModel, bothKeyEnv, claim string
 	var cf commonFlags
@@ -305,16 +459,16 @@ func cmdAudit(args []string, stdout, stderr io.Writer) int {
 	}
 	tClient, tSpec, err := resolveClient(cfg, target, "target", cf.timeout)
 	if err != nil {
-		return fail(stderr, fmt.Errorf("target: %w", err))
+		return failWithHint(stderr, fmt.Errorf("target: %w", err))
 	}
 	claimed := db.NormalizeFamily(claim)
 	if claim != "" && claimed == "" {
-		return fail(stderr, fmt.Errorf("unknown claimed family %q (known families: %s)", claim, strings.Join(db.Families(), ", ")))
+		return failWithHint(stderr, fmt.Errorf("unknown claimed family %q (known families: %s)", claim, strings.Join(db.Families(), ", ")))
 	}
 	if claimed == "" {
 		claimed = db.FamilyForModel(tSpec.Model)
 		if claimed == "" {
-			return fail(stderr, fmt.Errorf("cannot infer claimed family from model %q; pass --claim (known families: %s)", tSpec.Model, strings.Join(db.Families(), ", ")))
+			return failWithHint(stderr, fmt.Errorf("cannot infer claimed family from model %q; pass --claim (known families: %s)", tSpec.Model, strings.Join(db.Families(), ", ")))
 		}
 	}
 	// Resolve the official endpoint before spending any probe budget, so a
@@ -325,7 +479,7 @@ func cmdAudit(args []string, stdout, stderr io.Writer) int {
 	if hasOfficial {
 		client, spec, err := resolveClient(cfg, official, "official", cf.timeout)
 		if err != nil {
-			return fail(stderr, fmt.Errorf("official: %w", err))
+			return failWithHint(stderr, fmt.Errorf("official: %w", err))
 		}
 		oClient, oSpec = client, spec
 	}
@@ -369,15 +523,22 @@ func cmdAudit(args []string, stdout, stderr io.Writer) int {
 		})
 	}
 
+	progressEnabled := !cf.jsonOut || cf.verbose
 	opts := probe.Options{MaxRequests: cf.maxRequests, MinConfidence: cf.minConfidence}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	onProbe, done := probeProgress(stderr, progressEnabled, "target")
+	opts.OnProbe = onProbe
 	tRes, err := probe.Fingerprint(ctx, tClient, db, opts)
+	done()
 	if err != nil {
 		return fail(stderr, fmt.Errorf("target: %w", err))
 	}
 	if hasOfficial {
+		onProbe, done := probeProgress(stderr, progressEnabled, "official")
+		opts.OnProbe = onProbe
 		oRes, err := probe.Fingerprint(ctx, oClient, db, opts)
+		done()
 		if err != nil {
 			// Preserve the completed (paid) target evidence: report the
 			// target-only comparison, downgraded to inconclusive because

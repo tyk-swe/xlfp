@@ -484,6 +484,10 @@ func snippet(raw []byte) string {
 type Options struct {
 	MaxRequests   int     // hard cap per endpoint (Q8); <=0 uses len(probes)
 	MinConfidence float64 // verdict threshold; <=0 uses fingerprint default
+	// OnProbe, when set, is called after each probe request completes
+	// with the number of requests spent so far in this run (retries
+	// included). It is called synchronously; keep it cheap.
+	OnProbe func(requestsSpent int)
 }
 
 // Fingerprint probes an endpoint in adaptive stages: probes are sent one
@@ -541,6 +545,9 @@ func Fingerprint(ctx context.Context, c *Client, db *fingerprint.DB, opts Option
 				break
 			}
 			o, err := c.Send(ctx, p)
+			if opts.OnProbe != nil {
+				opts.OnProbe(spent())
+			}
 			if err != nil {
 				obs = append(obs, fingerprint.Observation{ProbeID: p.ID, Error: err.Error()})
 				return fail(fmt.Sprintf("probe %s failed: %v", p.ID, err))
