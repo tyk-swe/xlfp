@@ -3,6 +3,7 @@ package probe
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -238,6 +239,21 @@ func TestBuildURLErrors(t *testing.T) {
 	}
 }
 
+func TestCleartextKeyRejectsLocalhostSubdomains(t *testing.T) {
+	for _, endpoint := range []string{"http://dev.localhost", "http://nested.dev.localhost:8080", "http://DEV.LOCALHOST"} {
+		if _, err := New(config.EndpointSpec{Endpoint: endpoint, Model: "m", Transport: "openai", APIKey: "dummy-key"}, 0); err == nil {
+			t.Errorf("keyed cleartext endpoint %s accepted; localhost subdomains can use HTTP_PROXY", endpoint)
+		}
+		// The restriction is about credentials: keyless local gateways still work.
+		if _, err := New(config.EndpointSpec{Endpoint: endpoint, Model: "m", Transport: "openai"}, 0); err != nil {
+			t.Errorf("keyless endpoint %s rejected: %v", endpoint, err)
+		}
+	}
+	if _, err := New(config.EndpointSpec{Endpoint: "https://dev.localhost", Model: "m", Transport: "openai", APIKey: "dummy-key"}, 0); err != nil {
+		t.Fatalf("HTTPS localhost subdomain rejected: %v", err)
+	}
+}
+
 // Retries count toward the cap, so they must not push a run past it.
 func TestFingerprintCapIncludesRetries(t *testing.T) {
 	db, err := fingerprint.Load()
@@ -309,10 +325,17 @@ func TestParseUsageShapes(t *testing.T) {
 		{"openai", `{"usage":{"prompt_tokens":42}}`, 42, true},
 		{"openai", `{"usage":{"prompt_tokens":42.0}}`, 42, true},
 		{"openai", `{"usage":{"prompt_tokens":"42"}}`, 42, true},
+		{"openai", `{"usage":{"prompt_tokens":"42.0"}}`, 42, true},
+		{"openai", `{"usage":{"prompt_tokens":"1e3"}}`, 1000, true},
+		{"openai", `{"usage":{"prompt_tokens":"42garbage"}}`, 0, false},
+		{"openai", `{"usage":{"prompt_tokens":"42,000"}}`, 0, false},
+		{"openai", `{"usage":{"prompt_tokens":"42 99"}}`, 0, false},
 		{"openai", `{"usage":{"prompt_tokens":1e3}}`, 1000, true},
 		{"openai", `{"usage":{"prompt_tokens":42.5}}`, 0, false},
 		{"anthropic", `{"usage":{"input_tokens":2,"cache_read_input_tokens":100,"cache_creation_input_tokens":3}}`, 105, true},
+		{"anthropic", `{"usage":{"input_tokens":"42garbage"}}`, 0, false},
 		{"gemini", `{"usageMetadata":{"promptTokenCount":17}}`, 17, true},
+		{"gemini", `{"usageMetadata":{"promptTokenCount":"42,000"}}`, 0, false},
 		{"openai", `{"usage":{}}`, 0, false},
 	}
 	for _, c := range cases {
@@ -364,6 +387,38 @@ func TestErrorBodyKeyRedacted(t *testing.T) {
 	}
 	if strings.Contains(obs.Error, "super-secret-key-123") || !strings.Contains(obs.Error, "[redacted]") {
 		t.Fatalf("error not redacted: %q", obs.Error)
+	}
+}
+
+func TestErrorKeyRedactedBeforeTruncation(t *testing.T) {
+	const key = "super-secret-key-123"
+	for _, status := range []int{http.StatusUnauthorized, http.StatusOK} {
+		t.Run(fmt.Sprintf("status=%d", status), func(t *testing.T) {
+			prefixLen := 201 - len(key)
+			if status != http.StatusOK {
+				prefixLen -= len(`{"error":{"message":"`)
+			}
+			body, err := json.Marshal(map[string]any{"error": map[string]any{"message": strings.Repeat("x", prefixLen) + key}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(status)
+				_, _ = w.Write(body)
+			}))
+			defer srv.Close()
+			client, err := New(config.EndpointSpec{Endpoint: srv.URL, Model: "m", Transport: "openai", APIKey: key}, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			obs, err := client.Send(context.Background(), fingerprint.Probe{ID: "p", Text: "hello"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(obs.Error, key[:len(key)-1]) || !strings.Contains(obs.Error, "[redacted]") {
+				t.Fatalf("key was truncated before redaction: %q", obs.Error)
+			}
+		})
 	}
 }
 

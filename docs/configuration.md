@@ -44,9 +44,15 @@ Environment variables:
   `XLFP_TRANSPORT`, plus per-side audit forms such as
   `XLFP_TARGET_ENDPOINT` and `XLFP_OFFICIAL_MODEL` (same pattern for
   `ENDPOINT`/`MODEL`/`TRANSPORT`).
-- API keys are never sent over cleartext `http` except to loopback
-  hosts, and a key stored in a profile is bound to that profile's
-  endpoint host (retargeting it requires an explicitly named key).
+- API keys are never sent over cleartext `http` except to exact
+  `localhost` or loopback IP addresses. Subdomains such as
+  `dev.localhost` require HTTPS when a key is set because HTTP proxies
+  can forward them off-machine.
+- A literal key or `api_key_env` reference in config is bound to the
+  endpoint host where that credential is configured. Profile keys may
+  inherit the default endpoint; inherited default keys retain the default
+  host binding. Configure that endpoint explicitly, or use
+  `--api-key-env` / `XLFP_API_KEY` to opt in to another host.
 
 ## Config file and profiles
 

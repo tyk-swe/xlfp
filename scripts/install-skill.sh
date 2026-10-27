@@ -83,8 +83,22 @@ install_into() { # $1 = label, $2 = skills root
 }
 
 print_muse_instructions() {
+  muse_src="$SRC_DIR"
+  if [ -n "${TMP:-}" ] && [ "$SRC_DIR" = "$TMP/xlfp" ]; then
+    # The download directory is removed on exit; keep the source outside
+    # Muse's managed store until the user runs the printed command.
+    muse_src="${XDG_CACHE_HOME:-$HOME/.cache}/xlfp/skills/xlfp"
+    if [ "$DRY_RUN" -eq 1 ]; then
+      say "[muse] dry-run: would cache the downloaded skill in $muse_src"
+    else
+      mkdir -p "$muse_src"
+      cp "$SRC_DIR/SKILL.md" "$muse_src/SKILL.md"
+    fi
+  fi
   say "[muse] Muse Code manages its own skill store. Run this yourself:"
-  say "  muse skills install $SRC_DIR"
+  # Shell-quote the path, including spaces and embedded single quotes.
+  quoted_src="$(printf '%s' "$muse_src" | sed "s/'/'\\\\''/g")"
+  say "  muse skills install '$quoted_src'"
   installed_any=1
 }
 

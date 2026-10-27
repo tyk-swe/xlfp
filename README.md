@@ -39,7 +39,7 @@ irm https://raw.githubusercontent.com/tyk-swe/xlfp/main/install.ps1 | iex
 This downloads the right binary for your machine from the latest
 GitHub Release, verifies its SHA-256 checksum, and installs it to
 `~/.local/bin` (Windows: `%LOCALAPPDATA%\xlfp`). Set `XLFP_VERSION`
-to pin a release (e.g. `v0.1.1`) or `XLFP_INSTALL_DIR` to change the
+to pin a release (e.g. `v0.1.3`) or `XLFP_INSTALL_DIR` to change the
 destination.
 
 With Go 1.23+ you can also install or build from source:
@@ -148,6 +148,8 @@ Hermes can also install straight from the URL:
 `hermes skills install https://raw.githubusercontent.com/tyk-swe/xlfp/main/skills/xlfp/SKILL.md`.
 For Muse Code the script prints the `muse skills install …`
 command instead of copying files, because that store owns its writes.
+When run outside a checkout, downloaded Muse skill sources are kept in
+`${XDG_CACHE_HOME:-~/.cache}/xlfp/skills/xlfp` for that command to use.
 
 ## Documentation
 

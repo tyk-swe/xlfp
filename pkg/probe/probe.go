@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -78,7 +79,9 @@ func sanitizedEndpoint(raw string) string {
 
 func isLoopbackHost(host string) bool {
 	host = strings.ToLower(strings.Trim(host, "[]"))
-	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+	// Unlike exact localhost and loopback IPs, .localhost subdomains are
+	// not exempt from the standard transport's environment proxy rules.
+	if host == "localhost" {
 		return true
 	}
 	ip := net.ParseIP(host)
@@ -319,7 +322,7 @@ func (c *Client) sendOnce(ctx context.Context, p fingerprint.Probe, altShape boo
 		return s
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		obs.Error = redact(fmt.Sprintf("HTTP %d: %s", resp.StatusCode, snippet(raw)))
+		obs.Error = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, snippet([]byte(redact(string(raw)))))
 		if p.Special && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) {
 			obs.Rejected = true
 			obs.Error = ""
@@ -328,7 +331,7 @@ func (c *Client) sendOnce(ctx context.Context, p fingerprint.Probe, altShape boo
 	}
 	raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
 	if msg, isErr := topLevelError(raw); isErr {
-		obs.Error = redact("endpoint error in 200 response: " + msg)
+		obs.Error = "endpoint error in 200 response: " + snippet([]byte(redact(msg)))
 		return obs, raw, resp.Header, nil
 	}
 	tokens, ok := parseUsage(c.Spec.Transport, raw)
@@ -357,13 +360,13 @@ func topLevelError(raw []byte) (string, bool) {
 		Message string `json:"message"`
 	}
 	if json.Unmarshal(v.Error, &obj) == nil && obj.Message != "" {
-		return snippet([]byte(obj.Message)), true
+		return obj.Message, true
 	}
 	var s string
 	if json.Unmarshal(v.Error, &s) == nil && s != "" {
-		return snippet([]byte(s)), true
+		return s, true
 	}
-	return snippet(v.Error), true
+	return string(v.Error), true
 }
 
 // safeErr renders a transport error without leaking the request URL
@@ -432,8 +435,8 @@ func (f *flexInt) UnmarshalJSON(raw []byte) error {
 		}
 		s = strings.TrimSpace(str)
 	}
-	var n float64
-	if _, err := fmt.Sscan(s, &n); err != nil {
+	n, err := strconv.ParseFloat(s, 64)
+	if err != nil {
 		return fmt.Errorf("not a number: %q", s)
 	}
 	if n != float64(int64(n)) {

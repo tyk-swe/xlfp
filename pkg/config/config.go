@@ -206,18 +206,19 @@ func (c *Config) Resolve(ov Overrides) (EndpointSpec, error) {
 		spec.Transport = DetectTransport(spec.Endpoint)
 	}
 
-	key, fromProfile, err := c.resolveKey(ov, prof, spec.Endpoint, spec.Transport, envFor)
+	key, keyProfile, err := c.resolveKey(ov, prof, spec.Endpoint, spec.Transport, envFor)
 	if err != nil {
 		return EndpointSpec{}, err
 	}
-	// A key stored in / named by a profile is bound to that profile's
-	// endpoint host: silently retargeting the endpoint must not ship the
-	// profile's credential to a substitute host.
-	if fromProfile && ov.Profile != "" {
-		if raw, ok := c.Profiles[ov.Profile]; ok && raw.Endpoint != "" {
-			if hostname(raw.Endpoint) != hostname(spec.Endpoint) {
-				return EndpointSpec{}, fmt.Errorf("profile %q key is bound to endpoint host %q; refusing to send it to %q (use --api-key-env or a matching profile)", ov.Profile, hostname(raw.Endpoint), hostname(spec.Endpoint))
-			}
+	// Bind config credentials to their source endpoint before overrides.
+	// An inherited default credential keeps the default endpoint binding.
+	if keyProfile != nil {
+		boundHost := hostname(keyProfile.Endpoint)
+		if boundHost == "" {
+			return EndpointSpec{}, fmt.Errorf("config key has no endpoint host binding; configure an endpoint or use --api-key-env explicitly")
+		}
+		if boundHost != hostname(spec.Endpoint) {
+			return EndpointSpec{}, fmt.Errorf("config key is bound to endpoint host %q; refusing to send it to %q (use --api-key-env or a matching profile)", boundHost, hostname(spec.Endpoint))
 		}
 	}
 	spec.APIKey = strings.TrimSpace(key)
@@ -232,28 +233,32 @@ func hostname(endpoint string) string {
 	return strings.ToLower(u.Hostname())
 }
 
-// resolveKey returns the API key and whether it came from the selected
-// profile (literal or profile-named env var), for host binding.
-func (c *Config) resolveKey(ov Overrides, prof Profile, endpoint, transport string, envFor func(string) string) (string, bool, error) {
+// resolveKey returns the API key and its source profile for host binding.
+// Explicit environment keys and official ambient keys have no profile binding.
+func (c *Config) resolveKey(ov Overrides, prof Profile, endpoint, transport string, envFor func(string) string) (string, *Profile, error) {
 	// Explicitly named environment variable (flag): must be set.
 	if ov.APIKeyEnv != "" {
 		v := os.Getenv(ov.APIKeyEnv)
 		if v == "" {
-			return "", false, fmt.Errorf("environment variable %s named by --api-key-env is empty or unset", ov.APIKeyEnv)
+			return "", nil, fmt.Errorf("environment variable %s named by --api-key-env is empty or unset", ov.APIKeyEnv)
 		}
-		return v, false, nil
+		return v, nil, nil
 	}
-	// Environment wins over config: purpose env, profile-named env,
-	// transport-standard env, then generic XLFP_API_KEY.
+	// Tool-specific environment keys explicitly opt in to the resolved
+	// endpoint and take precedence over config references and literal keys.
 	if v := envFor("API_KEY"); v != "" {
-		return v, false, nil
+		return v, nil, nil
 	}
 	if prof.APIKeyEnv != "" {
 		if v := os.Getenv(prof.APIKeyEnv); v != "" {
-			return v, true, nil
+			source := &c.Profile
+			if c.Profiles[ov.Profile].APIKeyEnv != "" {
+				source = &prof
+			}
+			return v, source, nil
 		}
 		if ov.Profile != "" {
-			return "", false, fmt.Errorf("environment variable %s named by profile %q (api_key_env) is empty or unset", prof.APIKeyEnv, ov.Profile)
+			return "", nil, fmt.Errorf("environment variable %s named by profile %q (api_key_env) is empty or unset", prof.APIKeyEnv, ov.Profile)
 		}
 	}
 	// Provider-standard ambient keys (OPENAI_API_KEY etc.) are credentials
@@ -264,11 +269,18 @@ func (c *Config) resolveKey(ov Overrides, prof Profile, endpoint, transport stri
 	if IsOfficialHost(endpoint, transport) {
 		for _, name := range DefaultKeyEnvVars(transport) {
 			if v := os.Getenv(name); v != "" {
-				return v, false, nil
+				return v, nil, nil
 			}
 		}
 	}
-	return prof.APIKey, prof.APIKey != "", nil
+	if prof.APIKey != "" {
+		source := &c.Profile
+		if c.Profiles[ov.Profile].APIKey != "" {
+			source = &prof
+		}
+		return prof.APIKey, source, nil
+	}
+	return "", nil, nil
 }
 
 // DefaultKeyEnvVars returns the conventional key variables per transport.

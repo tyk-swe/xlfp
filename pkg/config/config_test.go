@@ -94,6 +94,38 @@ func TestConfigKeyFallbackAndFlagOverride(t *testing.T) {
 	}
 }
 
+func TestConfigKeyBindingWithInheritance(t *testing.T) {
+	clearKeyEnv(t)
+	t.Setenv("CONFIG_BOUND_KEY", "config-env-secret")
+	cases := []struct {
+		name, raw, profile, endpoint string
+		wantError                    bool
+	}{
+		{"default literal", `{"endpoint":"https://trusted.example","model":"m","api_key":"secret"}`, "", "https://other.example", true},
+		{"default env", `{"endpoint":"https://trusted.example","model":"m","api_key_env":"CONFIG_BOUND_KEY"}`, "", "https://other.example", true},
+		{"profile literal with inherited endpoint", `{"endpoint":"https://trusted.example","model":"m","profiles":{"p":{"api_key":"secret"}}}`, "p", "https://other.example", true},
+		{"profile env with inherited endpoint", `{"endpoint":"https://trusted.example","model":"m","profiles":{"p":{"api_key_env":"CONFIG_BOUND_KEY"}}}`, "p", "https://other.example", true},
+		{"inherited literal with different profile endpoint", `{"endpoint":"https://trusted.example","model":"m","api_key":"secret","profiles":{"p":{"endpoint":"https://other.example"}}}`, "p", "", true},
+		{"inherited env with different profile endpoint", `{"endpoint":"https://trusted.example","model":"m","api_key_env":"CONFIG_BOUND_KEY","profiles":{"p":{"endpoint":"https://other.example"}}}`, "p", "", true},
+		{"inherited env wins over profile literal", `{"endpoint":"https://trusted.example","model":"m","api_key_env":"CONFIG_BOUND_KEY","profiles":{"p":{"endpoint":"https://other.example","api_key":"profile-secret"}}}`, "p", "", true},
+		{"key without endpoint binding", `{"model":"m","api_key":"secret"}`, "", "https://other.example", true},
+		{"same host override", `{"endpoint":"https://trusted.example","model":"m","profiles":{"p":{"api_key":"secret"}}}`, "p", "https://trusted.example/v2", false},
+		{"profile owns endpoint and key", `{"endpoint":"https://trusted.example","model":"m","api_key":"default-secret","profiles":{"p":{"endpoint":"https://other.example","api_key":"profile-secret"}}}`, "p", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, tc.raw, 0o600))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = cfg.Resolve(Overrides{Profile: tc.profile, Endpoint: tc.endpoint})
+			if (err != nil) != tc.wantError {
+				t.Fatalf("Resolve error = %v; want rejection = %t", err, tc.wantError)
+			}
+		})
+	}
+}
+
 func TestLooseConfigPermissionsRejected(t *testing.T) {
 	clearKeyEnv(t)
 	_, err := Load(writeConfig(t, profileCfg, 0o644))
