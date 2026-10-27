@@ -24,3 +24,11 @@ jobs:
         run: go test -race -count=1 ./...
       - name: Build
         run: go build -o xlfp . && ./xlfp version
+      - name: Shell scripts syntax
+        run: sh -n install.sh scripts/install-skill.sh
+      - name: GoReleaser config
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check
