@@ -13,9 +13,10 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
+	"sort"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/tyk-swe/xlfp/pkg/config"
@@ -127,6 +128,15 @@ func BuildURL(spec config.EndpointSpec) (string, error) {
 	if u.User != nil {
 		return "", fmt.Errorf("invalid endpoint %s: userinfo is not supported; pass keys via environment or config", sanitizedEndpoint(raw))
 	}
+	// The environment proxy bypass recognizes the exact lowercase spelling.
+	// Canonicalize this loopback alias so mixed case cannot proxy a local key.
+	if strings.EqualFold(u.Hostname(), "localhost") {
+		host := "localhost"
+		if port := u.Port(); port != "" {
+			host = net.JoinHostPort(host, port)
+		}
+		u.Host = host
+	}
 	query, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
 		return "", fmt.Errorf("invalid endpoint %s: malformed query parameters", sanitizedEndpoint(raw))
@@ -138,8 +148,8 @@ func BuildURL(spec config.EndpointSpec) (string, error) {
 			return "", fmt.Errorf("invalid endpoint %s: credential query parameter %q is not supported; pass keys via environment or config", sanitizedEndpoint(raw), name)
 		}
 	}
-	u.Fragment, u.RawFragment, u.RawPath = "", "", ""
-	path := strings.TrimRight(u.Path, "/")
+	u.Fragment, u.RawFragment = "", ""
+	path := strings.TrimRight(u.EscapedPath(), "/")
 	lower := strings.ToLower(path)
 	switch spec.Transport {
 	case config.TransportAnthropic:
@@ -152,34 +162,40 @@ func BuildURL(spec config.EndpointSpec) (string, error) {
 		if strings.Contains(lower, ":streamgeneratecontent") {
 			return "", fmt.Errorf("invalid endpoint %s: streaming Gemini URLs are not supported; use the base URL", sanitizedEndpoint(raw))
 		}
-		if strings.Contains(path, ":generateContent") {
-			if m := geminiModelInPath(path); m != "" && spec.Model != "" && m != strings.TrimPrefix(strings.TrimPrefix(spec.Model, "models/"), "tunedModels/") {
+		model := strings.TrimSpace(spec.Model)
+		if !strings.HasPrefix(model, "models/") && !strings.HasPrefix(model, "tunedModels/") {
+			model = "models/" + model
+		}
+		if strings.HasSuffix(path, ":generateContent") {
+			if m := geminiModelInPath(path); m != "" && spec.Model != "" && m != model {
 				return "", fmt.Errorf("endpoint %s already names model %q, conflicting with --model %q", sanitizedEndpoint(raw), m, spec.Model)
 			}
 		} else {
-			model := strings.TrimSpace(spec.Model)
-			resource := "models/" + strings.TrimPrefix(model, "models/") + ":generateContent"
-			if strings.HasPrefix(model, "tunedModels/") {
-				resource = model + ":generateContent"
+			kind, name, _ := strings.Cut(model, "/")
+			if name == "" || strings.Contains(name, "/") || name == "." || name == ".." {
+				return "", fmt.Errorf("invalid Gemini model name")
 			}
+			resource := kind + "/" + url.PathEscape(name) + ":generateContent"
 			path = joinResource(path, "v1beta", resource)
 		}
 	default: // openai-compatible
 		path = joinResource(path, "v1", "chat/completions")
 	}
-	u.Path = path
+	u.Path, err = url.PathUnescape(path)
+	if err != nil {
+		return "", fmt.Errorf("invalid endpoint path")
+	}
+	u.RawPath = path
 	return u.String(), nil
 }
 
 func geminiModelInPath(path string) string {
-	i := strings.LastIndex(path, "/models/")
+	i := max(strings.LastIndex(path, "/models/"), strings.LastIndex(path, "/tunedModels/"))
 	if i < 0 {
-		if i = strings.LastIndex(path, "/tunedModels/"); i < 0 {
-			return ""
-		}
+		return ""
 	}
 	rest := path[i+1:]
-	seg := rest[strings.Index(rest, "/")+1:]
+	seg := rest
 	if j := strings.Index(seg, ":"); j >= 0 {
 		seg = seg[:j]
 	}
@@ -275,6 +291,9 @@ func paramShapeRejected(raw []byte) bool {
 }
 
 func (c *Client) sendOnce(ctx context.Context, p fingerprint.Probe, altShape bool) (fingerprint.Observation, []byte, http.Header, error) {
+	if err := ctx.Err(); err != nil {
+		return fingerprint.Observation{}, nil, nil, err
+	}
 	body, err := c.requestBody(p.Text, altShape)
 	if err != nil {
 		return fingerprint.Observation{}, nil, nil, err
@@ -329,11 +348,16 @@ func (c *Client) sendOnce(ctx context.Context, p fingerprint.Probe, altShape boo
 			// Truncation can make JSON undecodable and prevent safe redaction.
 			obs.Error = fmt.Sprintf("HTTP %d: response exceeded size limit", resp.StatusCode)
 		}
-		if p.Special && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) {
+		if p.Special && !truncated && !paramShapeRejected(raw) && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) {
 			obs.Rejected = true
 			obs.Error = ""
 		}
 		return obs, raw, resp.Header, nil
+	}
+	// A valid JSON prefix is not evidence that an oversized body is valid.
+	if truncated {
+		obs.Error = "response exceeded size limit"
+		return obs, nil, resp.Header, nil
 	}
 	raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
 	if msg, isErr := topLevelError(raw); isErr {
@@ -346,8 +370,6 @@ func (c *Client) sendOnce(ctx context.Context, p fingerprint.Probe, altShape boo
 		obs.PromptTokens, obs.HasUsage = tokens, true
 	case ok:
 		obs.Error = "response reported non-positive prompt-token usage"
-	case truncated:
-		obs.Error = "response exceeded size limit and carried no parseable prompt-token usage"
 	default:
 		obs.Error = "response carried no prompt-token usage"
 	}
@@ -470,77 +492,16 @@ func (c *Client) requestBody(text string, altShape bool) ([]byte, error) {
 	}
 }
 
-// flexInt accepts JSON numbers that are integral (42, 42.0, 1e3) and
-// numeric strings ("42"), as some gateways emit those shapes.
-type flexInt int
-
-func (f *flexInt) UnmarshalJSON(raw []byte) error {
-	s := strings.TrimSpace(string(raw))
-	if strings.HasPrefix(s, "\"") {
-		var str string
-		if err := json.Unmarshal(raw, &str); err != nil {
-			return err
-		}
-		s = strings.TrimSpace(str)
-	}
-	n, err := strconv.ParseFloat(s, 64)
-	if err != nil {
-		return fmt.Errorf("not a number: %q", s)
-	}
-	if n != float64(int64(n)) {
-		return fmt.Errorf("not an integer: %v", n)
-	}
-	*f = flexInt(int64(n))
-	return nil
-}
-
-// parseUsage extracts the prompt-token count per transport. Pointer
-// fields distinguish a missing usage field from a real zero. Anthropic
-// totals include cache creation/read tokens when present.
-func parseUsage(transport string, raw []byte) (int, bool) {
-	switch transport {
-	case config.TransportAnthropic:
-		var r struct {
-			Usage *struct {
-				InputTokens         *flexInt `json:"input_tokens"`
-				CacheCreationTokens *flexInt `json:"cache_creation_input_tokens"`
-				CacheReadTokens     *flexInt `json:"cache_read_input_tokens"`
-			} `json:"usage"`
-		}
-		if json.Unmarshal(raw, &r) == nil && r.Usage != nil && r.Usage.InputTokens != nil {
-			total := int(*r.Usage.InputTokens)
-			if r.Usage.CacheCreationTokens != nil {
-				total += int(*r.Usage.CacheCreationTokens)
-			}
-			if r.Usage.CacheReadTokens != nil {
-				total += int(*r.Usage.CacheReadTokens)
-			}
-			return total, true
-		}
-	case config.TransportGemini:
-		var r struct {
-			UsageMetadata *struct {
-				PromptTokenCount *flexInt `json:"promptTokenCount"`
-			} `json:"usageMetadata"`
-		}
-		if json.Unmarshal(raw, &r) == nil && r.UsageMetadata != nil && r.UsageMetadata.PromptTokenCount != nil {
-			return int(*r.UsageMetadata.PromptTokenCount), true
-		}
-	default:
-		var r struct {
-			Usage *struct {
-				PromptTokens *flexInt `json:"prompt_tokens"`
-			} `json:"usage"`
-		}
-		if json.Unmarshal(raw, &r) == nil && r.Usage != nil && r.Usage.PromptTokens != nil {
-			return int(*r.Usage.PromptTokens), true
-		}
-	}
-	return 0, false
-}
-
 func snippet(raw []byte) string {
 	s := strings.Join(strings.Fields(string(raw)), " ")
+	// Provider errors are untrusted terminal output. Keep readable Unicode,
+	// but remove escape/control characters (including OSC/CSI introducers).
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
 	if len(s) > 200 {
 		cut := 200
 		for cut > 0 && !utf8.RuneStart(s[cut]) {
@@ -567,7 +528,7 @@ type Options struct {
 // usable usage. A probe failure (transport error or HTTP >= 300) stops
 // probing; when enough usable counts were already collected, the partial
 // evidence is still ranked and returned with the failure noted, while a
-// failure before any verdict-grade evidence is an operational error.
+// failure before enough counts for a ranking is an operational error.
 func Fingerprint(ctx context.Context, c *Client, db *fingerprint.DB, opts Options) (fingerprint.Result, error) {
 	maxReq := opts.MaxRequests
 	if maxReq <= 0 {
@@ -576,23 +537,28 @@ func Fingerprint(ctx context.Context, c *Client, db *fingerprint.DB, opts Option
 	var obs []fingerprint.Observation
 	startReq := c.Requests()
 	spent := func() int { return c.Requests() - startReq }
-	maxStage := 0
+	stages := []int{}
+	seenStage := map[int]bool{}
+	ordinary := map[string]bool{}
 	for _, p := range db.Probes {
-		if p.Stage > maxStage {
-			maxStage = p.Stage
+		ordinary[p.ID] = !p.Special
+		if !seenStage[p.Stage] {
+			stages = append(stages, p.Stage)
+			seenStage[p.Stage] = true
 		}
 	}
+	sort.Ints(stages)
 	usable := func() int {
 		n := 0
 		for _, o := range obs {
-			if o.HasUsage && o.PromptTokens > 0 && !o.Rejected {
+			if ordinary[o.ProbeID] && o.UsableCount() {
 				n++
 			}
 		}
 		return n
 	}
 	// fail converts a probe failure into a partial ranked result when the
-	// evidence gathered so far is verdict-grade, else an error.
+	// evidence gathered so far can be ranked, else an error.
 	fail := func(failure string) (fingerprint.Result, error) {
 		if usable() < fingerprint.MinUsableProbes {
 			return fingerprint.Result{}, errors.New(failure)
@@ -607,7 +573,8 @@ func Fingerprint(ctx context.Context, c *Client, db *fingerprint.DB, opts Option
 		}
 		return res, nil
 	}
-	for stage := 1; stage <= maxStage; stage++ {
+	for _, stage := range stages {
+		before := usable()
 		for _, p := range db.Probes {
 			if p.Stage != stage {
 				continue
@@ -629,9 +596,9 @@ func Fingerprint(ctx context.Context, c *Client, db *fingerprint.DB, opts Option
 			}
 		}
 		res := db.Rank(obs, opts.MinConfidence)
-		// An endpoint that returns no usage at all will not start doing so
-		// in later stages; do not burn the whole budget proving it.
-		if res.ShouldStop() || spent() >= maxReq || (len(obs) > 0 && usable() == 0) {
+		// Stop when an entire stage adds no usable ordinary counts;
+		// prior-stage evidence must not keep an unproductive run going.
+		if res.ShouldStop() || spent() >= maxReq || (len(obs) > 0 && usable() == before) {
 			res.RequestsSpent = spent()
 			return res, nil
 		}

@@ -119,8 +119,9 @@ What xlfp cannot do
   - Separate Qwen from MiMo: they ship the identical tokenizer.
   - Give verdicts for Google/Claude yet: their tokenizers are not
     public, so they appear as scored hints, never verdicts.
-  - Work at all when a provider fakes its token-count numbers.
-    That stays inconclusive, by design.
+  - Authenticate the token-count numbers a provider reports.
+    Implausible counts are rejected, but convincing fabricated counts
+    can fool the fingerprint; a verdict is not proof of honest reporting.
 
 Costs and safety
   - Each check sends up to --max-requests (default 12) tiny, normally
@@ -167,7 +168,32 @@ func probeProgress(stderr io.Writer, enabled bool, label string) (func(int), fun
 		}
 }
 
-func run(args []string, stdout, stderr io.Writer) int {
+// checkedWriter retains errors from plain-text renderers as well as JSON.
+type checkedWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (w *checkedWriter) Write(p []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	n, err := w.w.Write(p)
+	if n < len(p) && err == nil {
+		err = io.ErrShortWrite
+	}
+	w.err = err
+	return n, err
+}
+
+func run(args []string, stdout, stderr io.Writer) (code int) {
+	out := &checkedWriter{w: stdout}
+	stdout = out
+	defer func() {
+		if out.err != nil {
+			code = fail(stderr, fmt.Errorf("writing output: %w", out.err))
+		}
+	}()
 	if len(args) == 0 {
 		if stdinIsTTY() {
 			return runWizard(stdinReader, stdout, stderr)
@@ -389,7 +415,7 @@ type auditOutput struct {
 	Command        string `json:"command"`
 	TargetEndpoint string `json:"target_endpoint"`
 	TargetModel    string `json:"target_model"`
-	// OfficialEndpoint is empty when no live baseline was probed.
+	// OfficialEndpoint is empty when no live baseline was requested.
 	OfficialEndpoint string `json:"official_endpoint,omitempty"`
 	OfficialModel    string `json:"official_model,omitempty"`
 	compare.Result
@@ -479,7 +505,15 @@ func cmdAudit(args []string, stdout, stderr io.Writer) int {
 	// bad official configuration fails before the target is touched.
 	var oClient *probe.Client
 	var oSpec config.EndpointSpec
-	hasOfficial := official.endpoint != "" || official.profile != "" || os.Getenv("XLFP_OFFICIAL_ENDPOINT") != ""
+	// An explicitly empty official selector opts out of ambient defaults.
+	// In particular, the wizard's "leave blank to skip" must mean skip.
+	explicitOfficial := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "official-url" || f.Name == "official-endpoint" || f.Name == "official-profile" {
+			explicitOfficial = true
+		}
+	})
+	hasOfficial := official.endpoint != "" || official.profile != "" || (!explicitOfficial && os.Getenv("XLFP_OFFICIAL_ENDPOINT") != "")
 	if hasOfficial {
 		client, spec, err := resolveClient(cfg, official, "official", cf.timeout)
 		if err != nil {
@@ -492,7 +526,7 @@ func cmdAudit(args []string, stdout, stderr io.Writer) int {
 	emit := func(res compare.Result) int {
 		if cf.jsonOut {
 			out := auditOutput{Command: "audit", TargetEndpoint: report.SanitizeURL(tSpec.Endpoint), TargetModel: tSpec.Model, Result: res}
-			if oPtr != nil {
+			if hasOfficial {
 				out.OfficialEndpoint = report.SanitizeURL(oSpec.Endpoint)
 				out.OfficialModel = oSpec.Model
 			}
@@ -501,7 +535,7 @@ func cmdAudit(args []string, stdout, stderr io.Writer) int {
 			}
 		} else {
 			officialLabel := ""
-			if oPtr != nil {
+			if hasOfficial {
 				officialLabel = oSpec.Endpoint
 			}
 			report.Audit(stdout, tSpec.Endpoint, officialLabel, res, cf.verbose)

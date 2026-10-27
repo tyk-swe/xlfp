@@ -128,13 +128,13 @@ func explainInconclusive(w io.Writer, r fingerprint.Result) {
 	case fingerprint.ReasonUnreliableCounts:
 		why = "The reported token counts barely changed from message to message, whatever the text. Real tokenizers do not behave like that, so the numbers look estimated or made up, and xlfp will not guess from numbers it cannot trust."
 		tries = []string{
-			"Usually nothing on your side is wrong: endpoints that fake their usage numbers stay inconclusive by design.",
+			"These counts fail the plausibility checks; convincing fabricated counts cannot be detected reliably.",
 			"If you run this endpoint yourself, make it report real per-request token usage.",
 		}
 	case fingerprint.ReasonScaledCounts:
 		why = "The counts grow faster or slower than the messages themselves, as if they were multiplied by a factor instead of actually counted."
 		tries = []string{
-			"Usually nothing on your side is wrong: endpoints that estimate usage stay inconclusive by design.",
+			"These counts fail the scale checks; a good fit alone would not authenticate the provider's reporting.",
 			"If you run this endpoint yourself, make it report real per-request token usage.",
 		}
 	case fingerprint.ReasonImplausibleOverhead:
@@ -260,10 +260,20 @@ func Uncover(w io.Writer, endpointLabel, model, transport string, r fingerprint.
 		explainInconclusive(w, r)
 		writeClosest(w, "\nClosest matches (not conclusive):", r)
 	}
+	if !verbose {
+		writeProbeWarning(w, "Warning", r)
+	}
 	if verbose {
 		writeTechnical(w, r)
 	} else {
 		fmt.Fprintln(w, "\nRun with --verbose for the technical evidence, or --json for machine-readable output.")
+	}
+}
+
+// writeProbeWarning preserves early-stop diagnostics in non-verbose reports.
+func writeProbeWarning(w io.Writer, label string, r fingerprint.Result) {
+	if i := strings.Index(r.Reason, "probing stopped early:"); i >= 0 {
+		fmt.Fprintf(w, "\n%s: %s\n", label, r.Reason[i:])
 	}
 }
 
@@ -322,6 +332,12 @@ func Audit(w io.Writer, targetLabel, officialLabel string, r compare.Result, ver
 	}
 	if r.Official != nil && r.Official.Status != fingerprint.StatusIdentified && r.Verdict != compare.VerdictInconclusive {
 		fmt.Fprintln(w, "Note: the official endpoint's own check was inconclusive, so it could not corroborate this result.")
+	}
+	if !verbose {
+		writeProbeWarning(w, "Target warning", r.Target)
+		if r.Official != nil {
+			writeProbeWarning(w, "Official warning", *r.Official)
+		}
 	}
 	if r.Divergence != nil && !verbose {
 		fmt.Fprintf(w, "\nCompared with the official endpoint, token counts differ by about %.1f tokens\nper message on average (a signal only — not proof of a weaker model).\n", r.Divergence.MeanAbsDiff)

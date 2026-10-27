@@ -59,7 +59,7 @@ def hf_counts(spec):
 
 def tiktoken_counts(name):
     enc = tiktoken.get_encoding(name)
-    # disallowed_special=() so special-token literals are encoded as specials
+    # Encode special-token literals as ordinary text (allowed_special stays empty).
     return [len(enc.encode(p["text"], disallowed_special=())) for p in PROBES]
 
 
@@ -132,7 +132,7 @@ def main():
         "entries": entries,
     }
     out = pathlib.Path(__file__).resolve().parent.parent / "pkg" / "fingerprint" / "db.json"
-    out.write_text(json.dumps(db, ensure_ascii=False, indent=1) + "\n")
+    out.write_text(json.dumps(db, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     for e in entries:
         print(e["id"], "verified" if e["verified"] else "UNVERIFIED", e["counts"])
     print("wrote", out)

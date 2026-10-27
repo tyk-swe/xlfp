@@ -142,12 +142,9 @@ func runWizard(stdin io.Reader, stdout, stderr io.Writer) int {
 	if mode == "uncover" {
 		return cmdUncover([]string{"--endpoint", endpoint, "--model", model}, stdout, stderr)
 	}
-	args := []string{"--target-url", endpoint, "--model", model}
+	args := []string{"--target-url", endpoint, "--model", model, "--official-url", official}
 	if claim != "" {
 		args = append(args, "--claim", claim)
-	}
-	if official != "" {
-		args = append(args, "--official-url", official)
 	}
 	return cmdAudit(args, stdout, stderr)
 }
@@ -190,9 +187,7 @@ func equivalentCommand(mode, endpoint, model, claim, official string) string {
 	if claim != "" {
 		cmd += " --claim " + shellQuote(claim)
 	}
-	if official != "" {
-		cmd += " --official-url " + shellQuote(official)
-	}
+	cmd += " --official-url " + shellQuote(official)
 	return cmd
 }
 

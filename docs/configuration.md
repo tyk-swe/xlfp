@@ -13,9 +13,9 @@ other hostnames or gateways:
 | `anthropic` | `POST /v1/messages` | `usage.input_tokens` |
 | `gemini` | `POST /v1beta/models/<model>:generateContent` | `usageMetadata.promptTokenCount` |
 
-The endpoint value may be a bare host, a versioned base (`/v1`, `/v2`,
+The endpoint value must include `http://` or `https://` and may be a host URL, a versioned base (`/v1`, `/v2`,
 `/v1beta`), any other prefix base such as an Azure deployment URL or
-Gemini's `/v1beta/openai`, or a full request URL. A bare host gains
+Gemini's `/v1beta/openai`, or a full request URL. A host URL without a path gains
 the default version prefix; any non-empty path is treated as a
 complete prefix. Query parameters such as Azure's `api-version` are
 preserved, while credential query parameters and URL userinfo are
@@ -35,11 +35,13 @@ Environment variables:
   opt-in for probing untrusted endpoints.
 - Provider-standard variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
   `GEMINI_API_KEY` / `GOOGLE_API_KEY`) are honored **only when the
-  endpoint host is that provider's official API host**. `xlfp` exists
+  endpoint is HTTPS on that provider's official API host and default port**. `xlfp` exists
   to probe unknown endpoints, so an ambient official key is never
   sent anywhere else. Redirects are never followed, for the same
   reason.
 - `--api-key-env NAME` names any variable to read the key from.
+  An unset or blank named variable, including a config `api_key_env`,
+  fails closed rather than falling back to an unrelated credential.
 - Non-secret overrides: `XLFP_ENDPOINT`, `XLFP_MODEL`,
   `XLFP_TRANSPORT`, plus per-side audit forms such as
   `XLFP_TARGET_ENDPOINT` and `XLFP_OFFICIAL_MODEL` (same pattern for
@@ -49,9 +51,9 @@ Environment variables:
   `dev.localhost` require HTTPS when a key is set because HTTP proxies
   can forward them off-machine.
 - A literal key or `api_key_env` reference in config is bound to the
-  endpoint host where that credential is configured. Profile keys may
-  inherit the default endpoint; inherited default keys retain the default
-  host binding. Configure that endpoint explicitly, or use
+  endpoint origin (scheme, host, and effective port) where that credential
+  is configured. Profile keys may inherit the default endpoint; inherited
+  default keys retain the default origin binding. Configure that endpoint explicitly, or use
   `--api-key-env` / `XLFP_API_KEY` to opt in to another host.
 
 ## Config file and profiles
@@ -78,7 +80,9 @@ them:
 ```
 
 Use a profile with `--profile provider-x` (uncover) or
-`--target-profile` / `--official-profile` (audit). A config file that
+`--target-profile` / `--official-profile` (audit). Pass `--official-url ''`
+to disable an `XLFP_OFFICIAL_ENDPOINT` default; leaving the wizard's official
+endpoint blank does this automatically. A config file that
 stores literal `api_key` values must not be group/world readable —
 on Linux and macOS `xlfp` refuses it until you run `chmod 600`
 (Windows has no such permission bits, so the check does not apply

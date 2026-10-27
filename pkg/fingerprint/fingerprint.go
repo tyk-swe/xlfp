@@ -81,7 +81,15 @@ func (db *DB) Validate() error {
 			return fmt.Errorf("fingerprint db: probe %s has stage < 1", p.ID)
 		}
 	}
+	seenEntries := map[string]bool{}
 	for _, e := range db.Entries {
+		if strings.TrimSpace(e.ID) == "" || seenEntries[e.ID] {
+			return fmt.Errorf("fingerprint db: duplicate or empty entry id %q", e.ID)
+		}
+		seenEntries[e.ID] = true
+		if strings.TrimSpace(e.Family) == "" {
+			return fmt.Errorf("fingerprint db: entry %s has an empty family", e.ID)
+		}
 		if len(e.Counts) != len(db.Probes) {
 			return fmt.Errorf("fingerprint db: entry %s has %d counts for %d probes", e.ID, len(e.Counts), len(db.Probes))
 		}

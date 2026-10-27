@@ -92,6 +92,7 @@ tar -xzf "$TMP/$ASSET" -C "$TMP"
 [ -f "$TMP/xlfp" ] || die "archive did not contain the xlfp binary"
 
 mkdir -p "$INSTALL_DIR"
+[ ! -d "$INSTALL_DIR/xlfp" ] || die "destination is a directory: $INSTALL_DIR/xlfp"
 install -m 0755 "$TMP/xlfp" "$INSTALL_DIR/xlfp"
 say "Installed: $INSTALL_DIR/xlfp"
 "$INSTALL_DIR/xlfp" version || true

@@ -143,11 +143,13 @@ func ComputeDivergence(db *fingerprint.DB, target, official fingerprint.Result) 
 			}
 		}
 		out := map[string]int{}
+		seen := map[string]bool{}
 		for _, o := range obs {
-			if _, dup := out[o.ProbeID]; dup {
+			if seen[o.ProbeID] {
 				continue
 			}
-			if known[o.ProbeID] && o.HasUsage && o.PromptTokens > 0 && !o.Rejected {
+			seen[o.ProbeID] = true
+			if known[o.ProbeID] && o.UsableCount() {
 				out[o.ProbeID] = o.PromptTokens
 			}
 		}

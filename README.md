@@ -19,8 +19,9 @@ What it can't:
 
 - The exact model version. Token counts can't prove that.
 - Whether a same-family model was secretly shrunk or degraded.
-- Anything at all if a provider fakes its token counts — that comes
-  back *inconclusive*, by design, never as a guess.
+- Authenticate provider-reported token counts. Missing or implausible
+  counts can be rejected, but deliberately forged counts that match a
+  known tokenizer can fool the fingerprint, including its confidence.
 
 ## Install
 
