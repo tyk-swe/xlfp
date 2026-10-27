@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+/xlfp
+/xlfp.exe
+/dist/
+*.test
+coverage.out
+*.out
+
+# Local configs and secrets (never commit; pkg/fingerprint/db.json is data, not config)
+/config.json
+/xlfp.json
+/*config*.json
+/.env
+/.env.*
+*.pem
+*.key

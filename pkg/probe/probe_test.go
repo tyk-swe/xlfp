@@ -1,0 +1,417 @@
+package probe
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"github.com/tyk-swe/xlfp/pkg/config"
+	"github.com/tyk-swe/xlfp/pkg/fingerprint"
+)
+
+func TestBuildURL(t *testing.T) {
+	cases := []struct{ transport, endpoint, model, want string }{
+		{"openai", "https://api.example.com", "m", "https://api.example.com/v1/chat/completions"},
+		{"openai", "https://api.example.com/v1", "m", "https://api.example.com/v1/chat/completions"},
+		{"openai", "https://api.example.com/v1/chat/completions", "m", "https://api.example.com/v1/chat/completions"},
+		{"openai", "https://api.example.com/v1?api-version=2024-02-01", "m", "https://api.example.com/v1/chat/completions?api-version=2024-02-01"},
+		{"openai", "https://api.example.com?api-version=2024-02-01#frag", "m", "https://api.example.com/v1/chat/completions?api-version=2024-02-01"},
+		{"anthropic", "https://api.anthropic.com", "m", "https://api.anthropic.com/v1/messages"},
+		{"anthropic", "https://api.anthropic.com/v1", "m", "https://api.anthropic.com/v1/messages"},
+		{"anthropic", "https://api.anthropic.com/v1/messages/count_tokens", "m", "https://api.anthropic.com/v1/messages"},
+		{"openai", "https://generativelanguage.googleapis.com/v1beta/openai", "m", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"},
+		{"openai", "https://api.example.com/v2", "m", "https://api.example.com/v2/chat/completions"},
+		{"openai", "https://res.openai.azure.com/openai/deployments/dep1", "m", "https://res.openai.azure.com/openai/deployments/dep1/chat/completions"},
+		{"gemini", "https://generativelanguage.googleapis.com", "gemini-2.0-flash", "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"},
+		{"gemini", "https://x.example/v1beta", "m", "https://x.example/v1beta/models/m:generateContent"},
+		{"gemini", "https://x.example", "models/gemini-2.0-flash", "https://x.example/v1beta/models/gemini-2.0-flash:generateContent"},
+	}
+	for _, c := range cases {
+		got, err := BuildURL(config.EndpointSpec{Transport: c.transport, Endpoint: c.endpoint, Model: c.model})
+		if err != nil || got != c.want {
+			t.Errorf("BuildURL(%s %s) = %q, %v; want %q", c.transport, c.endpoint, got, err, c.want)
+		}
+	}
+}
+
+type mockOpts struct {
+	noUsage       bool
+	authFail      bool
+	rejectSpecial bool
+}
+
+// mockServer emulates an endpoint whose tokenizer matches the given DB
+// entry, reporting expected count + a constant template overhead.
+func mockServer(t *testing.T, transport, entryID string, overhead int, mo mockOpts) (*httptest.Server, *int64) {
+	t.Helper()
+	db, err := fingerprint.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	textToCount := map[string]int{}
+	specialText := map[string]bool{}
+	for _, e := range db.Entries {
+		if e.ID == entryID {
+			for i, p := range db.Probes {
+				textToCount[p.Text] = e.Counts[i] + overhead
+				specialText[p.Text] = p.Special
+			}
+		}
+	}
+	var calls int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		if mo.authFail {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"bad key"}`))
+			return
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		text := extractText(body)
+		if mo.rejectSpecial && specialText[text] && strings.Contains(text, "<|endoftext|>") {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"special token not allowed"}`))
+			return
+		}
+		count, ok := textToCount[text]
+		if !ok {
+			w.WriteHeader(http.StatusTeapot)
+			_, _ = w.Write([]byte(`{"error":"unknown probe ` + "" + `"}`))
+			return
+		}
+		if mo.noUsage {
+			_, _ = w.Write([]byte(`{"id":"x"}`))
+			return
+		}
+		switch transport {
+		case config.TransportAnthropic:
+			_ = json.NewEncoder(w).Encode(map[string]any{"usage": map[string]any{"input_tokens": count, "output_tokens": 1}})
+		case config.TransportGemini:
+			_ = json.NewEncoder(w).Encode(map[string]any{"usageMetadata": map[string]any{"promptTokenCount": count}})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"usage": map[string]any{"prompt_tokens": count, "completion_tokens": 1}})
+		}
+	}))
+	t.Cleanup(srv.Close)
+	// Only the engine part of extractText is used; keep it here to avoid a
+	// helper that has to know about mockOpts.
+	return srv, &calls
+}
+
+func extractText(body map[string]any) string {
+	if msgs, ok := body["messages"].([]any); ok && len(msgs) > 0 {
+		if m, ok := msgs[0].(map[string]any); ok {
+			if s, ok := m["content"].(string); ok {
+				return s
+			}
+		}
+	}
+	if contents, ok := body["contents"].([]any); ok && len(contents) > 0 {
+		if c, ok := contents[0].(map[string]any); ok {
+			if parts, ok := c["parts"].([]any); ok && len(parts) > 0 {
+				if p, ok := parts[0].(map[string]any); ok {
+					if s, ok := p["text"].(string); ok {
+						return s
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func runFingerprint(t *testing.T, transport, entryID string, overhead int, mo mockOpts, opts Options) (fingerprint.Result, *int64, error) {
+	t.Helper()
+	srv, calls := mockServer(t, transport, entryID, overhead, mo)
+	db, err := fingerprint.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := New(config.EndpointSpec{Endpoint: srv.URL, Model: "mock-model", Transport: transport, APIKey: "test-key"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := Fingerprint(context.Background(), client, db, opts)
+	return res, calls, err
+}
+
+func TestFingerprintOpenAIIdentifiesDeepSeek(t *testing.T) {
+	res, calls, err := runFingerprint(t, config.TransportOpenAI, "deepseek-v3", 6, mockOpts{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != fingerprint.StatusIdentified || res.TopFamily != "deepseek" {
+		t.Fatalf("got %s/%q reason %q", res.Status, res.TopFamily, res.Reason)
+	}
+	if res.RequestsSpent != int(*calls) || res.RequestsSpent > 12 {
+		t.Fatalf("requests spent %d vs calls %d", res.RequestsSpent, *calls)
+	}
+}
+
+func TestFingerprintAnthropicAndGeminiTransports(t *testing.T) {
+	res, _, err := runFingerprint(t, config.TransportAnthropic, "mistral-v3", 9, mockOpts{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.TopFamily != "mistral" {
+		t.Fatalf("anthropic transport: got %s/%q reason %q", res.Status, res.TopFamily, res.Reason)
+	}
+	res, _, err = runFingerprint(t, config.TransportGemini, "glm4", 2, mockOpts{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.TopFamily != "glm" {
+		t.Fatalf("gemini transport: got %s/%q reason %q", res.Status, res.TopFamily, res.Reason)
+	}
+}
+
+func TestFingerprintCapEnforced(t *testing.T) {
+	res, calls, err := runFingerprint(t, config.TransportOpenAI, "deepseek-v3", 6, mockOpts{}, Options{MaxRequests: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *calls != 2 || res.RequestsSpent != 2 {
+		t.Fatalf("cap violated: calls=%d spent=%d", *calls, res.RequestsSpent)
+	}
+	if res.Status == fingerprint.StatusIdentified {
+		t.Fatal("two probes must not produce a verdict")
+	}
+}
+
+func TestFingerprintMissingUsageInconclusiveNotError(t *testing.T) {
+	res, _, err := runFingerprint(t, config.TransportOpenAI, "deepseek-v3", 6, mockOpts{noUsage: true}, Options{})
+	if err != nil {
+		t.Fatalf("missing usage should be inconclusive, not error: %v", err)
+	}
+	if res.Status != fingerprint.StatusInconclusive {
+		t.Fatalf("got %s", res.Status)
+	}
+}
+
+func TestFingerprintAuthFailureAborts(t *testing.T) {
+	_, calls, err := runFingerprint(t, config.TransportOpenAI, "deepseek-v3", 6, mockOpts{authFail: true}, Options{})
+	if err == nil {
+		t.Fatal("401 must be an operational error")
+	}
+	if *calls != 1 {
+		t.Fatalf("must abort after first failed probe, got %d calls", *calls)
+	}
+}
+
+func TestBuildURLErrors(t *testing.T) {
+	for _, ep := range []string{
+		"https://user:pass@example.com",
+		"https://example.com/v1?key=secret-value",
+		"https://example.com/v1?api_key=secret-value",
+		"ftp://example.com",
+		"https:opaque-secret",
+	} {
+		_, err := BuildURL(config.EndpointSpec{Transport: "openai", Endpoint: ep, Model: "m"})
+		if err == nil {
+			t.Errorf("endpoint %q accepted", ep)
+		} else if strings.Contains(err.Error(), "secret-value") || strings.Contains(err.Error(), "user:pass") || strings.Contains(err.Error(), "opaque-secret") {
+			t.Errorf("error for %q leaks a secret: %v", ep, err)
+		}
+	}
+	if _, err := BuildURL(config.EndpointSpec{Transport: "gemini", Endpoint: "https://x.example/v1beta/models/other:generateContent", Model: "wanted"}); err == nil {
+		t.Error("conflicting Gemini full-URL model accepted")
+	}
+	if _, err := New(config.EndpointSpec{Transport: "openai", Endpoint: "http://example.com", Model: "m", APIKey: "k"}, 0); err == nil {
+		t.Error("cleartext http with a key to a non-loopback host accepted")
+	}
+	if _, err := New(config.EndpointSpec{Transport: "openai", Endpoint: "http://127.0.0.1:9999", Model: "m", APIKey: "k"}, 0); err != nil {
+		t.Errorf("loopback http with a key should be allowed: %v", err)
+	}
+}
+
+func TestParseUsageShapes(t *testing.T) {
+	cases := []struct {
+		transport, raw string
+		want           int
+		ok             bool
+	}{
+		{"openai", `{"usage":{"prompt_tokens":42}}`, 42, true},
+		{"openai", `{"usage":{"prompt_tokens":42.0}}`, 42, true},
+		{"openai", `{"usage":{"prompt_tokens":"42"}}`, 42, true},
+		{"openai", `{"usage":{"prompt_tokens":1e3}}`, 1000, true},
+		{"openai", `{"usage":{"prompt_tokens":42.5}}`, 0, false},
+		{"anthropic", `{"usage":{"input_tokens":2,"cache_read_input_tokens":100,"cache_creation_input_tokens":3}}`, 105, true},
+		{"gemini", `{"usageMetadata":{"promptTokenCount":17}}`, 17, true},
+		{"openai", `{"usage":{}}`, 0, false},
+	}
+	for _, c := range cases {
+		got, ok := parseUsage(c.transport, []byte(c.raw))
+		if got != c.want || ok != c.ok {
+			t.Errorf("parseUsage(%s %s) = %d,%v want %d,%v", c.transport, c.raw, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+func TestTransientRetryOnce(t *testing.T) {
+	var calls int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt64(&calls, 1) == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":"slow down"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"usage":{"prompt_tokens":42}}`))
+	}))
+	defer srv.Close()
+	client, err := New(config.EndpointSpec{Endpoint: srv.URL, Model: "m", Transport: "openai"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs, err := client.Send(context.Background(), fingerprint.Probe{ID: "p1", Text: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !obs.HasUsage || obs.PromptTokens != 42 || calls != 2 || client.Requests() != 2 {
+		t.Fatalf("obs=%+v calls=%d requests=%d", obs, calls, client.Requests())
+	}
+}
+
+func TestErrorBodyKeyRedacted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"bad credential super-secret-key-123"}`))
+	}))
+	defer srv.Close()
+	client, err := New(config.EndpointSpec{Endpoint: srv.URL, Model: "m", Transport: "openai", APIKey: "super-secret-key-123"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs, err := client.Send(context.Background(), fingerprint.Probe{ID: "p1", Text: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(obs.Error, "super-secret-key-123") || !strings.Contains(obs.Error, "[redacted]") {
+		t.Fatalf("error not redacted: %q", obs.Error)
+	}
+}
+
+// Regression (review): redirects must never be followed, or an untrusted
+// endpoint could bounce API-key headers to a host of its choosing.
+func TestRedirectNotFollowed(t *testing.T) {
+	var targetHits int64
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&targetHits, 1)
+		_, _ = w.Write([]byte(`{"usage":{"prompt_tokens":42}}`))
+	}))
+	defer target.Close()
+	redir := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", target.URL)
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer redir.Close()
+	client, err := New(config.EndpointSpec{Endpoint: redir.URL, Model: "m", Transport: "anthropic", APIKey: "k"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs, err := client.Send(context.Background(), fingerprint.Probe{ID: "p1", Text: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obs.HTTPStatus != http.StatusTemporaryRedirect {
+		t.Fatalf("status = %d, want the 307 itself", obs.HTTPStatus)
+	}
+	if targetHits != 0 {
+		t.Fatalf("redirect target was contacted %d times", targetHits)
+	}
+	if client.Requests() != 1 {
+		t.Fatalf("requests = %d, want 1", client.Requests())
+	}
+}
+
+// Regression (review): a mid-run failure must not discard verdict-grade
+// evidence already collected; the partial ranking is returned, noted.
+func TestFingerprintPartialEvidenceAfterFailure(t *testing.T) {
+	db, err := fingerprint.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var e fingerprint.Entry
+	for _, en := range db.Entries {
+		if en.ID == "deepseek-v3" {
+			e = en
+		}
+	}
+	counts := map[string]int{}
+	for i, p := range db.Probes {
+		counts[p.Text] = e.Counts[i] + 6
+	}
+	var calls int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt64(&calls, 1)
+		if n > 4 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"boom"}`))
+			return
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewEncoder(w).Encode(map[string]any{"usage": map[string]any{"prompt_tokens": counts[extractText(body)]}})
+	}))
+	defer srv.Close()
+	client, err := New(config.EndpointSpec{Endpoint: srv.URL, Model: "mock-model", Transport: "openai"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A high threshold keeps stage 1 from settling, so probing reaches the
+	// failing fifth request with four usable counts already in hand.
+	res, err := Fingerprint(context.Background(), client, db, Options{MinConfidence: 0.999})
+	if err != nil {
+		t.Fatalf("partial evidence should rank, not error: %v", err)
+	}
+	if res.RequestsSpent != 5 || len(res.Observations) != 5 {
+		t.Fatalf("spent=%d observations=%d", res.RequestsSpent, len(res.Observations))
+	}
+	if !strings.Contains(res.Reason, "probing stopped early") {
+		t.Fatalf("reason should note the early stop, got %q", res.Reason)
+	}
+	if len(res.Rankings) == 0 || res.Rankings[0].Family != "deepseek" {
+		t.Fatalf("partial rankings should still lead with deepseek: %+v", res.Rankings)
+	}
+}
+
+func TestFingerprintSpecialRejection(t *testing.T) {
+	// Directly: a 400 on a special probe is recorded as Rejected evidence.
+	srv, _ := mockServer(t, config.TransportOpenAI, "openai-o200k", 4, mockOpts{rejectSpecial: true})
+	db, err := fingerprint.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := New(config.EndpointSpec{Endpoint: srv.URL, Model: "mock-model", Transport: "openai"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var special fingerprint.Probe
+	for _, p := range db.Probes {
+		if p.ID == "special_a" {
+			special = p
+		}
+	}
+	obs, err := client.Send(context.Background(), special)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !obs.Rejected || obs.Error != "" {
+		t.Fatalf("special_a observation = %+v, want rejected with no error", obs)
+	}
+	// End to end: the rejecting endpoint still fingerprints as OpenAI
+	// (adaptive staging may settle before stage 3 sends the special probes).
+	res, _, err := runFingerprint(t, config.TransportOpenAI, "openai-o200k", 4, mockOpts{rejectSpecial: true}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.TopFamily != "openai" {
+		t.Fatalf("got %s/%q reason %q", res.Status, res.TopFamily, res.Reason)
+	}
+}

@@ -1,0 +1,327 @@
+{
+ "version": "1.0.0",
+ "note": "Raw-text counts; ranking fits a constant chat-template overhead per endpoint. verified=false entries are scored for display but never rendered as verdicts (PROJECT.md Q5).",
+ "probes": [
+  {
+   "id": "en_pangram",
+   "stage": 1,
+   "text": "The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs!"
+  },
+  {
+   "id": "cjk_zh",
+   "stage": 1,
+   "text": "机器学习模型需要大量的训练数据和计算资源。深度学习改变了人工智能。"
+  },
+  {
+   "id": "numbers",
+   "stage": 1,
+   "text": "1234567890 987654321 3.14159265358979 1000000 42 0.001"
+  },
+  {
+   "id": "emoji_zwj",
+   "stage": 1,
+   "text": "😀🚀🧑‍💻🇺🇸👩🏾‍🔬❤️✨🔥"
+  },
+  {
+   "id": "code_go",
+   "stage": 2,
+   "text": "func main() { fmt.Println(\"hello, world\") } // x := a + b*2"
+  },
+  {
+   "id": "cjk_ja_ko",
+   "stage": 2,
+   "text": "こんにちは世界、これはテストです。안녕하세요 세계, 이것은 테스트입니다."
+  },
+  {
+   "id": "whitespace",
+   "stage": 2,
+   "text": "a    b\n\n\nc\td      e        f"
+  },
+  {
+   "id": "unicode_mixed",
+   "stage": 2,
+   "text": "Crème brûlée — naïve façade. Привет мир! مرحبا بالعالم"
+  },
+  {
+   "id": "repeated_a",
+   "stage": 3,
+   "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+   "id": "en_short",
+   "stage": 3,
+   "text": "Hello world"
+  },
+  {
+   "id": "special_a",
+   "stage": 3,
+   "special": true,
+   "text": "<|endoftext|> hello <|im_start|> user"
+  },
+  {
+   "id": "special_b",
+   "stage": 3,
+   "special": true,
+   "text": "[INST] <<SYS>> <s> </s> <|begin_of_text|>"
+  }
+ ],
+ "entries": [
+  {
+   "id": "openai-o200k",
+   "family": "openai",
+   "display": "OpenAI",
+   "tokenizer": "o200k_base",
+   "verified": true,
+   "source": "tiktoken o200k_base (official encoding)",
+   "counts": [
+    20,
+    20,
+    26,
+    23,
+    20,
+    17,
+    10,
+    17,
+    8,
+    2,
+    15,
+    19
+   ],
+   "reject_probes": [
+    "special_a"
+   ],
+   "aliases": [
+    "gpt",
+    "gpt-4",
+    "gpt-5",
+    "o1",
+    "o3",
+    "chatgpt"
+   ]
+  },
+  {
+   "id": "openai-cl100k",
+   "family": "openai",
+   "display": "OpenAI",
+   "tokenizer": "cl100k_base",
+   "verified": true,
+   "source": "tiktoken cl100k_base (official encoding)",
+   "counts": [
+    20,
+    36,
+    26,
+    37,
+    20,
+    30,
+    10,
+    28,
+    8,
+    2,
+    14,
+    18
+   ],
+   "reject_probes": [
+    "special_a"
+   ],
+   "aliases": [
+    "gpt-3.5",
+    "gpt-4-turbo"
+   ]
+  },
+  {
+   "id": "qwen25",
+   "family": "qwen",
+   "display": "Qwen",
+   "tokenizer": "Qwen2.5 BPE",
+   "verified": true,
+   "source": "Qwen/Qwen2.5-7B-Instruct tokenizer.json",
+   "counts": [
+    20,
+    16,
+    54,
+    17,
+    20,
+    18,
+    10,
+    21,
+    8,
+    2,
+    5,
+    18
+   ],
+   "reject_probes": [],
+   "aliases": [
+    "qwen",
+    "tongyi",
+    "qwq"
+   ]
+  },
+  {
+   "id": "deepseek-v3",
+   "family": "deepseek",
+   "display": "DeepSeek",
+   "tokenizer": "DeepSeek V3 BPE",
+   "verified": true,
+   "source": "deepseek-ai/DeepSeek-V3 tokenizer.json",
+   "counts": [
+    20,
+    13,
+    26,
+    24,
+    20,
+    24,
+    10,
+    19,
+    8,
+    2,
+    15,
+    20
+   ],
+   "reject_probes": [],
+   "aliases": [
+    "deepseek"
+   ]
+  },
+  {
+   "id": "mistral-v3",
+   "family": "mistral",
+   "display": "Mistral",
+   "tokenizer": "Mistral v3 Tekken/BPE",
+   "verified": true,
+   "source": "mistralai/Mistral-7B-Instruct-v0.3 tokenizer.json",
+   "counts": [
+    23,
+    33,
+    55,
+    28,
+    22,
+    41,
+    13,
+    29,
+    11,
+    2,
+    17,
+    17
+   ],
+   "reject_probes": [],
+   "aliases": [
+    "mistral",
+    "mixtral",
+    "codestral"
+   ]
+  },
+  {
+   "id": "glm4",
+   "family": "glm",
+   "display": "GLM",
+   "tokenizer": "GLM-4 tiktoken-format BPE",
+   "verified": true,
+   "source": "THUDM/glm-4-9b-chat tokenizer.model",
+   "counts": [
+    20,
+    15,
+    34,
+    35,
+    20,
+    23,
+    10,
+    21,
+    8,
+    2,
+    14,
+    18
+   ],
+   "reject_probes": [],
+   "aliases": [
+    "glm",
+    "chatglm",
+    "zhipu"
+   ]
+  },
+  {
+   "id": "mimo-7b",
+   "family": "mimo",
+   "display": "MiMo",
+   "tokenizer": "MiMo-7B BPE",
+   "verified": true,
+   "source": "XiaomiMiMo/MiMo-7B-Base tokenizer.json",
+   "counts": [
+    20,
+    16,
+    54,
+    17,
+    20,
+    18,
+    10,
+    21,
+    8,
+    2,
+    5,
+    18
+   ],
+   "reject_probes": [],
+   "aliases": [
+    "mimo",
+    "xiaomi"
+   ]
+  },
+  {
+   "id": "google-gemma-sp",
+   "family": "google",
+   "display": "Google",
+   "tokenizer": "Gemma SentencePiece (Gemini proxy)",
+   "verified": false,
+   "source": "Xenova/gemma-tokenizer tokenizer.json (community conversion; Gemini server tokenizer is closed)",
+   "counts": [
+    19,
+    17,
+    54,
+    13,
+    21,
+    18,
+    11,
+    16,
+    8,
+    2,
+    14,
+    20
+   ],
+   "reject_probes": [],
+   "aliases": [
+    "gemini",
+    "gemma",
+    "google"
+   ]
+  },
+  {
+   "id": "claude-xenova",
+   "family": "claude",
+   "display": "Claude",
+   "tokenizer": "Claude BPE (community conversion)",
+   "verified": false,
+   "source": "Xenova/claude-tokenizer tokenizer.json (community conversion; current Claude server tokenizer is closed)",
+   "counts": [
+    20,
+    27,
+    17,
+    33,
+    22,
+    39,
+    12,
+    31,
+    4,
+    2,
+    16,
+    21
+   ],
+   "reject_probes": [],
+   "aliases": [
+    "claude",
+    "anthropic",
+    "sonnet",
+    "opus",
+    "haiku"
+   ]
+  }
+ ]
+}
