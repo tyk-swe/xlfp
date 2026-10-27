@@ -19,6 +19,16 @@ const (
 	VerdictInconclusive = "inconclusive"
 )
 
+// Machine-stable reason codes for inconclusive audit verdicts. When the
+// code is ReasonTargetInconclusive, Result.Target.ReasonCode carries the
+// underlying fingerprint cause.
+const (
+	ReasonUnverifiedClaim    = "unverified_claim"
+	ReasonTargetInconclusive = "target_inconclusive"
+	ReasonOfficialInDoubt    = "official_in_doubt"
+	ReasonOfficialFailed     = "official_failed" // baseline probing failed; target-only evidence shown
+)
+
 // Divergence summarizes target-vs-official count differences per probe,
 // normalized by each side's fitted chat-template overhead.
 type Divergence struct {
@@ -40,6 +50,7 @@ type Result struct {
 	Verdict       string              `json:"verdict"`
 	ClaimedFamily string              `json:"claimed_family"`
 	Reason        string              `json:"reason,omitempty"`
+	ReasonCode    string              `json:"reason_code,omitempty"` // stable machine-readable cause (see Reason* consts)
 	Target        fingerprint.Result  `json:"target"`
 	Official      *fingerprint.Result `json:"official,omitempty"`
 	Divergence    *Divergence         `json:"divergence,omitempty"`
@@ -61,10 +72,12 @@ func Evaluate(db *fingerprint.DB, claimed string, target fingerprint.Result, off
 	}
 
 	if !db.IsVerified(claimed) {
+		res.ReasonCode = ReasonUnverifiedClaim
 		res.Reason = fmt.Sprintf("claimed family %q is not a verified family in database v%s, so no verdict can be rendered for it", claimed, db.Version)
 		return res
 	}
 	if target.Status != fingerprint.StatusIdentified {
+		res.ReasonCode = ReasonTargetInconclusive
 		res.Reason = "target fingerprint is inconclusive: " + target.Reason
 		return res
 	}
@@ -84,6 +97,7 @@ func Evaluate(db *fingerprint.DB, claimed string, target fingerprint.Result, off
 		switch {
 		case official.Status == fingerprint.StatusIdentified && official.TopFamily != claimed && official.TopFamily != target.TopFamily:
 			res.Verdict = VerdictInconclusive
+			res.ReasonCode = ReasonOfficialInDoubt
 			res.Reason = fmt.Sprintf("official baseline fingerprints as %s, which matches neither the claim %q nor the target %s; the reference itself is in doubt", official.TopFamily, claimed, target.TopFamily)
 		case official.Status != fingerprint.StatusIdentified:
 			res.Reason += "; official baseline was inconclusive and did not corroborate this result"

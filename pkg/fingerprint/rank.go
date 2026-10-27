@@ -12,6 +12,22 @@ const (
 	StatusInconclusive = "inconclusive"
 )
 
+// Machine-stable reason codes for inconclusive results. Reason carries the
+// full technical explanation; ReasonCode lets renderers and agents switch
+// on the cause without parsing prose. Identified results have no code.
+const (
+	ReasonInsufficientCounts  = "insufficient_counts" // too few usable token counts
+	ReasonNoVerifiedFamilies  = "no_verified_families"
+	ReasonUnreliableCounts    = "unreliable_counts" // counts vary implausibly little
+	ReasonImplausibleOverhead = "implausible_overhead"
+	ReasonScaledCounts        = "scaled_counts" // counts look scaled/estimated
+	ReasonInconsistentCounts  = "inconsistent_counts"
+	ReasonPoorFit             = "poor_fit" // no known family fits
+	ReasonSharedTokenizer     = "shared_tokenizer"
+	ReasonUnverifiedBest      = "unverified_best"
+	ReasonLowConfidence       = "low_confidence"
+)
+
 // Ranking thresholds. These are the implementation-stage values for the
 // tuning details left open by PROJECT.md Q8; they are deliberately
 // conservative so thin or tied evidence yields inconclusive (Q3).
@@ -58,8 +74,9 @@ type Result struct {
 	Status        string        `json:"status"` // StatusIdentified | StatusInconclusive
 	TopFamily     string        `json:"top_family,omitempty"`
 	Reason        string        `json:"reason,omitempty"`
-	Rankings      []FamilyRank  `json:"rankings"`            // verified families only (Q5)
-	Unverified    []FamilyRank  `json:"unverified_rankings"` // scored, never rendered as verdicts (Q5)
+	ReasonCode    string        `json:"reason_code,omitempty"` // stable machine-readable cause (see Reason* consts)
+	Rankings      []FamilyRank  `json:"rankings"`              // verified families only (Q5)
+	Unverified    []FamilyRank  `json:"unverified_rankings"`   // scored, never rendered as verdicts (Q5)
 	Observations  []Observation `json:"observations"`
 	RequestsSpent int           `json:"requests_spent"`
 	DBVersion     string        `json:"db_version"`
@@ -124,6 +141,7 @@ func (db *DB) Rank(obs []Observation, minConfidence float64) Result {
 		}
 	}
 	if len(usable) < MinUsableProbes {
+		res.ReasonCode = ReasonInsufficientCounts
 		res.Reason = fmt.Sprintf("only %d usable token counts (usage missing, non-positive, or probes rejected); at least %d are required", len(usable), MinUsableProbes)
 		res.Rankings, res.Unverified = []FamilyRank{}, []FamilyRank{}
 		return res
@@ -248,6 +266,7 @@ func (db *DB) Rank(obs []Observation, minConfidence float64) Result {
 		}
 	}
 	if len(res.Rankings) == 0 {
+		res.ReasonCode = ReasonNoVerifiedFamilies
 		res.Reason = "no verified families in database"
 		return res
 	}
@@ -278,28 +297,30 @@ func (db *DB) Rank(obs []Observation, minConfidence float64) Result {
 	}
 	unverifiedBetter := len(res.Unverified) > 0 && res.Unverified[0].MAE <= MaxVerdictMAE && res.Unverified[0].MAE+1.0 < top.MAE
 	topScore := best[top.Family]
+	setReason := func(code, reason string) { res.ReasonCode, res.Reason = code, reason }
 	switch {
 	case degenerate:
-		res.Reason = fmt.Sprintf("reported counts vary implausibly little (observed range %.0f vs expected %.0f for %s); usage reporting is unreliable or fabricated", obsRange, expRange, top.Family)
+		setReason(ReasonUnreliableCounts, fmt.Sprintf("reported counts vary implausibly little (observed range %.0f vs expected %.0f for %s); usage reporting is unreliable or fabricated", obsRange, expRange, top.Family))
 	case len(usable) < MinVerdictProbes:
-		res.Reason = fmt.Sprintf("only %d usable token counts; at least %d are required for a verdict", len(usable), MinVerdictProbes)
+		setReason(ReasonInsufficientCounts, fmt.Sprintf("only %d usable token counts; at least %d are required for a verdict", len(usable), MinVerdictProbes))
 	case topScore.overhead < MinPlausibleOverhead || topScore.overhead > MaxPlausibleOverhead:
-		res.Reason = fmt.Sprintf("fitted chat-template overhead %.1f for %s is implausible (allowed %.0f..%.0f); counts are not consistent with raw-text tokenization plus a template", topScore.overhead, top.Family, MinPlausibleOverhead, MaxPlausibleOverhead)
+		setReason(ReasonImplausibleOverhead, fmt.Sprintf("fitted chat-template overhead %.1f for %s is implausible (allowed %.0f..%.0f); counts are not consistent with raw-text tokenization plus a template", topScore.overhead, top.Family, MinPlausibleOverhead, MaxPlausibleOverhead))
 	case topScore.slope < MinPlausibleSlope || topScore.slope > MaxPlausibleSlope:
-		res.Reason = fmt.Sprintf("observed counts scale by %.2f relative to %s (allowed %.2f..%.2f); usage appears scaled or estimated rather than counted", topScore.slope, top.Family, MinPlausibleSlope, MaxPlausibleSlope)
+		setReason(ReasonScaledCounts, fmt.Sprintf("observed counts scale by %.2f relative to %s (allowed %.2f..%.2f); usage appears scaled or estimated rather than counted", topScore.slope, top.Family, MinPlausibleSlope, MaxPlausibleSlope))
 	case topScore.maxResid > MaxVerdictResidual:
-		res.Reason = fmt.Sprintf("one probe deviates by %.1f tokens from %s after overhead fit (max allowed %.0f); evidence is internally inconsistent", topScore.maxResid, top.Family, MaxVerdictResidual)
+		setReason(ReasonInconsistentCounts, fmt.Sprintf("one probe deviates by %.1f tokens from %s after overhead fit (max allowed %.0f); evidence is internally inconsistent", topScore.maxResid, top.Family, MaxVerdictResidual))
 	case topScore.rawMAE > MaxVerdictMAE:
-		res.Reason = fmt.Sprintf("best family %s still fits poorly (MAE %.2f > %.2f); unknown tokenizer or unreliable usage reporting", top.Family, topScore.rawMAE, MaxVerdictMAE)
+		reason := fmt.Sprintf("best family %s still fits poorly (MAE %.2f > %.2f); unknown tokenizer or unreliable usage reporting", top.Family, topScore.rawMAE, MaxVerdictMAE)
 		if unverifiedBetter {
-			res.Reason += fmt.Sprintf("; closest overall match is unverified family %s (MAE %.2f), which cannot be rendered as a verdict", res.Unverified[0].Family, res.Unverified[0].MAE)
+			reason += fmt.Sprintf("; closest overall match is unverified family %s (MAE %.2f), which cannot be rendered as a verdict", res.Unverified[0].Family, res.Unverified[0].MAE)
 		}
+		setReason(ReasonPoorFit, reason)
 	case sharedTie != "":
-		res.Reason = fmt.Sprintf("families %s and %s share an identical tokenizer and cannot be separated by token counts", top.Family, sharedTie)
+		setReason(ReasonSharedTokenizer, fmt.Sprintf("families %s and %s share an identical tokenizer and cannot be separated by token counts", top.Family, sharedTie))
 	case unverifiedBetter:
-		res.Reason = fmt.Sprintf("closest overall match is unverified family %s (MAE %.2f), ahead of verified %s (MAE %.2f); unverified families cannot be rendered as verdicts", res.Unverified[0].Family, res.Unverified[0].MAE, top.Family, top.MAE)
+		setReason(ReasonUnverifiedBest, fmt.Sprintf("closest overall match is unverified family %s (MAE %.2f), ahead of verified %s (MAE %.2f); unverified families cannot be rendered as verdicts", res.Unverified[0].Family, res.Unverified[0].MAE, top.Family, top.MAE))
 	case top.Confidence < minConfidence:
-		res.Reason = fmt.Sprintf("top family %s confidence %.3f is below the %.3f verdict threshold", top.Family, top.Confidence, minConfidence)
+		setReason(ReasonLowConfidence, fmt.Sprintf("top family %s confidence %.3f is below the %.3f verdict threshold", top.Family, top.Confidence, minConfidence))
 	default:
 		res.Status = StatusIdentified
 		res.TopFamily = top.Family

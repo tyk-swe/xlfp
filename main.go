@@ -101,6 +101,7 @@ type endpointFlags struct {
 type commonFlags struct {
 	configPath    string
 	jsonOut       bool
+	verbose       bool
 	maxRequests   int
 	timeout       time.Duration
 	minConfidence float64
@@ -152,6 +153,7 @@ func cmdUncover(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&ef.apiKeyEnv, "api-key-env", "", "name of env var holding the API key (never the key itself)")
 	fs.StringVar(&cf.configPath, "config", "", "config file path")
 	fs.BoolVar(&cf.jsonOut, "json", false, "emit JSON")
+	fs.BoolVar(&cf.verbose, "verbose", false, "also print technical evidence (tokenizer scores, per-probe counts)")
 	fs.IntVar(&cf.maxRequests, "max-requests", 12, "hard cap on probe requests")
 	fs.DurationVar(&cf.timeout, "timeout", 30*time.Second, "per-request timeout")
 	fs.Float64Var(&cf.minConfidence, "min-confidence", 0, "verdict confidence threshold (0 = default)")
@@ -191,7 +193,7 @@ func cmdUncover(args []string, stdout, stderr io.Writer) int {
 			return fail(stderr, err)
 		}
 	} else {
-		report.Uncover(stdout, spec.Endpoint, spec.Model, spec.Transport, res)
+		report.Uncover(stdout, spec.Endpoint, spec.Model, spec.Transport, res, cf.verbose)
 	}
 	if res.Status == fingerprint.StatusIdentified {
 		return exitOK
@@ -260,6 +262,7 @@ func cmdAudit(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&claim, "claim", "", "claimed family, e.g. deepseek (default: inferred from model)")
 	fs.StringVar(&cf.configPath, "config", "", "config file path")
 	fs.BoolVar(&cf.jsonOut, "json", false, "emit JSON")
+	fs.BoolVar(&cf.verbose, "verbose", false, "also print technical evidence (tokenizer scores, per-probe counts)")
 	fs.IntVar(&cf.maxRequests, "max-requests", 12, "hard cap on probe requests per endpoint")
 	fs.DurationVar(&cf.timeout, "timeout", 30*time.Second, "per-request timeout")
 	fs.Float64Var(&cf.minConfidence, "min-confidence", 0, "verdict confidence threshold (0 = default)")
@@ -343,7 +346,7 @@ func cmdAudit(args []string, stdout, stderr io.Writer) int {
 			if oPtr != nil {
 				officialLabel = oSpec.Endpoint
 			}
-			report.Audit(stdout, tSpec.Endpoint, officialLabel, res)
+			report.Audit(stdout, tSpec.Endpoint, officialLabel, res, cf.verbose)
 		}
 		switch res.Verdict {
 		case compare.VerdictMatch:
@@ -361,7 +364,7 @@ func cmdAudit(args []string, stdout, stderr io.Writer) int {
 	if !db.IsVerified(claimed) {
 		reason := fmt.Sprintf("claimed family %q is not a verified family in database v%s, so no verdict can be rendered for it", claimed, db.Version)
 		return emit(compare.Result{
-			Verdict: compare.VerdictInconclusive, ClaimedFamily: claimed, Reason: reason,
+			Verdict: compare.VerdictInconclusive, ClaimedFamily: claimed, Reason: reason, ReasonCode: compare.ReasonUnverifiedClaim,
 			Target: fingerprint.Result{Status: fingerprint.StatusInconclusive, Reason: reason + "; endpoint not probed", DBVersion: db.Version, Rankings: []fingerprint.FamilyRank{}, Unverified: []fingerprint.FamilyRank{}, Observations: []fingerprint.Observation{}},
 		})
 	}
@@ -381,6 +384,7 @@ func cmdAudit(args []string, stdout, stderr io.Writer) int {
 			// the requested baseline could not be probed.
 			res := compare.Evaluate(db, claimed, tRes, nil)
 			res.Verdict = compare.VerdictInconclusive
+			res.ReasonCode = compare.ReasonOfficialFailed
 			res.Reason = fmt.Sprintf("official baseline probing failed (%v); target-only result is shown but no verdict is safe", err)
 			return emit(res)
 		}

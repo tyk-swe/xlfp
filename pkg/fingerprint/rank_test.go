@@ -275,3 +275,35 @@ func TestNormalizeAndInferFamily(t *testing.T) {
 		t.Errorf("NormalizeFamily(nonsense) = %q", got)
 	}
 }
+
+func TestRankReasonCodes(t *testing.T) {
+	db := loadDB(t)
+
+	// Identified results carry no reason code.
+	res := db.Rank(observationsFor(db, entryByID(t, db, "deepseek-v3"), 6), 0)
+	if res.Status != StatusIdentified || res.ReasonCode != "" {
+		t.Fatalf("identified: status %s code %q", res.Status, res.ReasonCode)
+	}
+
+	// No usable counts at all.
+	res = db.Rank(nil, 0)
+	if res.ReasonCode != ReasonInsufficientCounts {
+		t.Fatalf("empty obs: code %q reason %q", res.ReasonCode, res.Reason)
+	}
+
+	// Constant fabricated counts are unreliable, never a verdict.
+	obs := observationsFor(db, entryByID(t, db, "deepseek-v3"), 0)
+	for i := range obs {
+		obs[i].PromptTokens = 50
+	}
+	res = db.Rank(obs, 0)
+	if res.Status != StatusInconclusive || res.ReasonCode != ReasonUnreliableCounts {
+		t.Fatalf("constant counts: status %s code %q reason %q", res.Status, res.ReasonCode, res.Reason)
+	}
+
+	// Qwen and MiMo share one tokenizer byte-for-byte: a tie, not a guess.
+	res = db.Rank(observationsFor(db, entryByID(t, db, "qwen25"), 6), 0)
+	if res.Status != StatusInconclusive || res.ReasonCode != ReasonSharedTokenizer {
+		t.Fatalf("qwen tie: status %s code %q reason %q", res.Status, res.ReasonCode, res.Reason)
+	}
+}
