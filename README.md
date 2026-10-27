@@ -10,8 +10,6 @@ counts tokens, and matches that pattern against known model families
 tokenizers needed: the output tells you the likely family, what it
 means, and what to do next — or honestly says "inconclusive."
 
-Design decisions live in [PROJECT.md](./PROJECT.md).
-
 What it can tell you:
 
 - Which model **family** an endpoint most likely is, with evidence.
@@ -41,10 +39,8 @@ irm https://raw.githubusercontent.com/tyk-swe/xlfp/main/install.ps1 | iex
 This downloads the right binary for your machine from the latest
 GitHub Release, verifies its SHA-256 checksum, and installs it to
 `~/.local/bin` (Windows: `%LOCALAPPDATA%\xlfp`). Set `XLFP_VERSION`
-to pin a release (e.g. `v0.1.0`) or `XLFP_INSTALL_DIR` to change the
-destination. *While this repository is private, the script uses the
-GitHub CLI (`gh`, after `gh auth login`) or a `GH_TOKEN` to read the
-release; anonymous download starts working when the repo goes public.*
+to pin a release (e.g. `v0.1.1`) or `XLFP_INSTALL_DIR` to change the
+destination.
 
 With Go 1.23+ you can also install or build from source:
 
@@ -148,169 +144,19 @@ scripts/install-skill.sh --target hermes # or codex / claude / muse
 scripts/install-skill.sh --dry-run       # show what would happen
 ```
 
-Hermes can also install straight from the URL (once the repo is
-public): `hermes skills install https://raw.githubusercontent.com/tyk-swe/xlfp/main/skills/xlfp/SKILL.md`.
+Hermes can also install straight from the URL:
+`hermes skills install https://raw.githubusercontent.com/tyk-swe/xlfp/main/skills/xlfp/SKILL.md`.
 For Muse Code the script prints the `muse skills install …`
 command instead of copying files, because that store owns its writes.
 
-## Reference
+## Documentation
 
-### Transports and endpoint forms
-
-Three API shapes are supported. The official Anthropic and Gemini
-hosts are auto-detected; everything else defaults to `openai`, so pass
-`--transport anthropic` or `--transport gemini` for native APIs behind
-other hostnames or gateways:
-
-| Transport | Request shape | Usage field read |
-|---|---|---|
-| `openai` (compatible) | `POST /v1/chat/completions` | `usage.prompt_tokens` |
-| `anthropic` | `POST /v1/messages` | `usage.input_tokens` |
-| `gemini` | `POST /v1beta/models/<model>:generateContent` | `usageMetadata.promptTokenCount` |
-
-The endpoint value may be a bare host, a versioned base (`/v1`, `/v2`,
-`/v1beta`), any other prefix base such as an Azure deployment URL or
-Gemini's `/v1beta/openai`, or a full request URL. A bare host gains
-the default version prefix; any non-empty path is treated as a
-complete prefix. Query parameters such as Azure's `api-version` are
-preserved, while credential query parameters and URL userinfo are
-rejected. Qwen, DeepSeek, GLM, Mistral, MiMo and OpenAI endpoints are
-normally reached through the `openai` transport. Azure OpenAI hosts
-receive the `api-key` header instead of `Authorization`.
-
-### How it works
-
-1. A fixed corpus of 12 probe strings (English, CJK, numbers, emoji
-   ZWJ sequences, code, whitespace runs, special-token literals, …)
-   is sent to the endpoint in three adaptive stages. Probing stops
-   early when the ranking is confidently settled, never exceeding
-   `--max-requests` (default 12) per endpoint. On a terminal, a
-   one-line progress counter shows requests as they are sent.
-2. The reported prompt-token counts are compared against an embedded,
-   versioned database of expected counts per tokenizer, generated
-   from real tokenizer files by [tools/gen_db.py](./tools/gen_db.py):
-   official tiktoken encodings (OpenAI), official Hugging Face
-   tokenizer files (Qwen, DeepSeek, Mistral, GLM, MiMo), and
-   clearly-labelled community conversions for the closed
-   Google/Claude server tokenizers.
-3. Chat APIs count template tokens around the user text, so ranking
-   fits a constant per-endpoint overhead (median of observed −
-   expected) and scores the mean absolute residual after removing it.
-   Confidence accumulates per probe over one global softmax. Counts
-   that barely vary across probes are declared unreliable rather than
-   identified. Special-token probes contribute acceptance/rejection
-   evidence only (a 400/422 refusal); their counts never enter the
-   fit. Every inconclusive result carries a machine-stable
-   `reason_code` (JSON) alongside the technical `reason`.
-4. Only **source-verified** families can be rendered as verdicts, and
-   an unverified family that fits clearly better than every
-   source-verified one forces inconclusive rather than a false
-   verdict. "Source-verified" means the counts are reproduced from
-   the family's official tokenizer encoding/file at a hash-pinned
-   revision (see [NOTICE.md](./NOTICE.md)) and pinned by regression
-   fixtures. In DB v1.0.0 those families are OpenAI, Qwen, DeepSeek,
-   Mistral, GLM and MiMo. The maintainer has additionally completed
-   live testing of these families against official endpoints.
-   Positive identifications are strong evidence about the model
-   family; token counts still cannot prove an exact checkpoint.
-   Google and Claude are scored and shown as unverified candidates.
-   Some families share a tokenizer byte-for-byte (Qwen2.5 and MiMo-7B
-   ship an identical `tokenizer.json`), so ties between them are
-   reported, not guessed.
-
-### API keys and config
-
-Keys come from the **environment or a config file only** — there is
-no flag that takes a literal key. On conflict the environment wins.
-
-Environment variables:
-
-- `XLFP_API_KEY`, plus `XLFP_TARGET_API_KEY` / `XLFP_OFFICIAL_API_KEY`
-  per audit side. These tool-specific variables are the explicit
-  opt-in for probing untrusted endpoints.
-- Provider-standard variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
-  `GEMINI_API_KEY` / `GOOGLE_API_KEY`) are honored **only when the
-  endpoint host is that provider's official API host**. `xlfp` exists
-  to probe unknown endpoints, so an ambient official key is never
-  sent anywhere else. Redirects are never followed, for the same
-  reason.
-- `--api-key-env NAME` names any variable to read the key from.
-- Non-secret overrides: `XLFP_ENDPOINT`, `XLFP_MODEL`,
-  `XLFP_TRANSPORT`, plus per-side audit forms such as
-  `XLFP_TARGET_ENDPOINT` and `XLFP_OFFICIAL_MODEL` (same pattern for
-  `ENDPOINT`/`MODEL`/`TRANSPORT`).
-- API keys are never sent over cleartext `http` except to loopback
-  hosts, and a key stored in a profile is bound to that profile's
-  endpoint host (retargeting it requires an explicitly named key).
-
-Config file: `--config PATH`, else `$XLFP_CONFIG`, else
-`xlfp/config.json` inside the operating system's user config
-directory (Linux: `${XDG_CONFIG_HOME:-~/.config}`, macOS:
-`~/Library/Application Support`, Windows: `%AppData%`). A config in
-the current directory is never auto-loaded; pass it explicitly with
-`--config`. Top-level fields are defaults; named profiles override
-them:
-
-```json
-{
-  "profiles": {
-    "provider-x": {
-      "endpoint": "https://provider.example",
-      "model": "deepseek-chat",
-      "transport": "openai",
-      "api_key_env": "PROVIDER_X_KEY"
-    }
-  }
-}
-```
-
-Use a profile with `--profile provider-x` (uncover) or
-`--target-profile` / `--official-profile` (audit). A config file that
-stores literal `api_key` values must not be group/world readable —
-`xlfp` refuses it until you run `chmod 600`. Keys are never printed,
-logged, or included in either output format; endpoints are displayed
-with userinfo and query strings stripped.
-
-### Development
-
-```bash
-go vet ./...
-go test -race -count=1 ./...
-```
-
-Releases are cut by tagging `v*`, which runs the GoReleaser workflow
-(`.goreleaser.yaml`) and publishes per-OS/arch archives plus SHA-256
-checksums to a GitHub Release.
-
-The `pkg/` packages are importable, but before v1.0 there is **no Go
-API stability guarantee**; the CLI, its exit codes, and its JSON
-fields are the supported surface. Package layout mirrors the spec:
-
-- `pkg/fingerprint` — embedded DB (`db.json`), overhead-fit ranking,
-  tie/inconclusive rules, stable reason codes.
-- `pkg/probe` — the three transports and the staged, capped probe
-  runner (with an `OnProbe` progress callback).
-- `pkg/compare` — audit verdicts and overhead-normalized divergence.
-- `pkg/config` — flag/env/config resolution (environment wins for
-  keys).
-- `pkg/report` — plain-English rendering, `--verbose` technical
-  detail (JSON is the result structs).
-
-To regenerate the fingerprint database after changing the probe
-corpus or tokenizer sources, use the project Python environment:
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -r tools/requirements.txt
-.venv/bin/python tools/gen_db.py
-```
-
-Downloads are pinned to recorded revisions and verified by SHA-256.
-
-Known v1 limits, restated: family-level claims only; Qwen/MiMo
-cannot be separated by token counts; Google/Claude verdicts wait on
-a verifiable server-tokenizer source; endpoints that omit or
-fabricate usage produce inconclusive results by design.
+- [How it works](./docs/how-it-works.md) — probing, ranking,
+  verified vs unverified families, and inherent limits.
+- [Configuration](./docs/configuration.md) — transports, endpoint
+  forms, API-key rules, environment variables, config profiles.
+- [Development](./docs/development.md) — build/test commands,
+  release process, database regeneration, package layout.
 
 ## Responsible use
 
@@ -322,12 +168,16 @@ diagnostic tokenizer evidence about the model family — it is not, on
 its own, proof of fraud, quantization, or quality degradation.
 Verify before publishing claims about a provider.
 
+## Contact
+
+- Twitter/X: [@xodud_rkd](https://x.com/xodud_rkd)
+- Discord: `@xodud`
+
 ## License and attribution
 
 GPL-3.0-only — Copyright (C) 2026 tyk-swe. See
-[LICENSE](./LICENSE). Tokenizer-data provenance and
-third-party notices are in [NOTICE.md](./NOTICE.md). This is an
-independent project, not affiliated with or endorsed by OpenAI,
-Anthropic, Google, Alibaba, DeepSeek, Mistral AI, Zhipu AI, or
-Xiaomi; their names identify the tokenizers and endpoints being
-measured.
+[LICENSE](./LICENSE). Tokenizer-data provenance and third-party
+notices are in [NOTICE.md](./NOTICE.md). This is an independent
+project, not affiliated with or endorsed by OpenAI, Anthropic,
+Google, Alibaba, DeepSeek, Mistral AI, Zhipu AI, or Xiaomi; their
+names identify the tokenizers and endpoints being measured.
