@@ -64,6 +64,12 @@ func Evaluate(db *fingerprint.DB, claimed string, target fingerprint.Result, off
 	res.RequestsSpent = target.RequestsSpent
 	if official != nil {
 		res.RequestsSpent += official.RequestsSpent
+		// A partial ranking does not make an operationally failed baseline safe.
+		if official.ProbeError != "" {
+			res.ReasonCode = ReasonOfficialFailed
+			res.Reason = fmt.Sprintf("official baseline probing failed (%s); target and partial baseline evidence are shown but no verdict is safe", official.ProbeError)
+			return res
+		}
 		// Overhead-normalized divergence is only meaningful when both
 		// overheads come from an identified fit.
 		if target.Status == fingerprint.StatusIdentified && official.Status == fingerprint.StatusIdentified {

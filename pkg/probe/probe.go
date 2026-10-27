@@ -572,6 +572,7 @@ func Fingerprint(ctx context.Context, c *Client, db *fingerprint.DB, opts Option
 		}
 		res := db.Rank(obs, opts.MinConfidence)
 		res.RequestsSpent = spent()
+		res.ProbeError = failure
 		note := "probing stopped early: " + failure
 		if res.Reason == "" {
 			res.Reason = note
