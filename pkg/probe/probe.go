@@ -338,15 +338,23 @@ func (c *Client) sendOnce(ctx context.Context, p fingerprint.Probe, altShape boo
 	if truncated {
 		raw = raw[:maxResponseBytes]
 	}
+	// Normalize the BOM before either error redaction or usage parsing.
+	raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
 	obs := fingerprint.Observation{ProbeID: p.ID, HTTPStatus: resp.StatusCode}
 	redact := func(s string) string {
 		return redactErrorText(s, c.Spec.APIKey)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		obs.Error = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, snippet([]byte(redact(string(raw)))))
-		if truncated {
+		switch {
+		case truncated:
 			// Truncation can make JSON undecodable and prevent safe redaction.
 			obs.Error = fmt.Sprintf("HTTP %d: response exceeded size limit", resp.StatusCode)
+		case c.Spec.APIKey != "" && !json.Valid(raw):
+			// Prefixes and malformed JSON can conceal an escaped key from
+			// literal replacement. Keep the status, but fail closed on the body.
+			obs.Error = fmt.Sprintf("HTTP %d: non-JSON error body omitted", resp.StatusCode)
+		default:
+			obs.Error = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, snippet([]byte(redact(string(raw)))))
 		}
 		if p.Special && !truncated && !paramShapeRejected(raw) && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) {
 			obs.Rejected = true
@@ -359,7 +367,6 @@ func (c *Client) sendOnce(ctx context.Context, p fingerprint.Probe, altShape boo
 		obs.Error = "response exceeded size limit"
 		return obs, nil, resp.Header, nil
 	}
-	raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
 	if msg, isErr := topLevelError(raw); isErr {
 		obs.Error = "endpoint error in 200 response: " + snippet([]byte(redact(msg)))
 		return obs, raw, resp.Header, nil
