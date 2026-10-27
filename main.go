@@ -81,6 +81,9 @@ Examples:
   xlfp audit --target-url https://provider.example --model deepseek-chat --claim deepseek
 
   # Stronger: also probe the official API in the same run as a baseline.
+  # Each side needs its own key.
+  export XLFP_TARGET_API_KEY='the key for that provider'
+  export XLFP_OFFICIAL_API_KEY='your key for the official API'
   xlfp audit --target-url https://provider.example --official-url https://api.deepseek.com \
       --model deepseek-chat --claim deepseek
 
@@ -545,6 +548,7 @@ func cmdAudit(args []string, stdout, stderr io.Writer) int {
 			// target-only comparison, downgraded to inconclusive because
 			// the requested baseline could not be probed.
 			res := compare.Evaluate(db, claimed, tRes, nil)
+			res.RequestsSpent += oClient.Requests()
 			res.Verdict = compare.VerdictInconclusive
 			res.ReasonCode = compare.ReasonOfficialFailed
 			res.Reason = fmt.Sprintf("official baseline probing failed (%v); target-only result is shown but no verdict is safe", err)

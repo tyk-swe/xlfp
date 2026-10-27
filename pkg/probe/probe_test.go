@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/tyk-swe/xlfp/pkg/config"
 	"github.com/tyk-swe/xlfp/pkg/fingerprint"
@@ -29,6 +30,7 @@ func TestBuildURL(t *testing.T) {
 		{"gemini", "https://generativelanguage.googleapis.com", "gemini-2.0-flash", "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"},
 		{"gemini", "https://x.example/v1beta", "m", "https://x.example/v1beta/models/m:generateContent"},
 		{"gemini", "https://x.example", "models/gemini-2.0-flash", "https://x.example/v1beta/models/gemini-2.0-flash:generateContent"},
+		{"gemini", "https://x.example/v1beta/tunedModels/t1:generateContent", "tunedModels/t1", "https://x.example/v1beta/tunedModels/t1:generateContent"},
 	}
 	for _, c := range cases {
 		got, err := BuildURL(config.EndpointSpec{Transport: c.transport, Endpoint: c.endpoint, Model: c.model})
@@ -225,8 +227,76 @@ func TestBuildURLErrors(t *testing.T) {
 	if _, err := New(config.EndpointSpec{Transport: "openai", Endpoint: "http://example.com", Model: "m", APIKey: "k"}, 0); err == nil {
 		t.Error("cleartext http with a key to a non-loopback host accepted")
 	}
-	if _, err := New(config.EndpointSpec{Transport: "openai", Endpoint: "http://127.0.0.1:9999", Model: "m", APIKey: "k"}, 0); err != nil {
-		t.Errorf("loopback http with a key should be allowed: %v", err)
+	// A DNS name that merely starts with "127." can resolve anywhere.
+	if _, err := New(config.EndpointSpec{Transport: "openai", Endpoint: "http://127.attacker.example", Model: "m", APIKey: "k"}, 0); err == nil {
+		t.Error("cleartext http with a key to a 127.-prefixed hostname accepted")
+	}
+	for _, ep := range []string{"http://127.0.0.1:9999", "http://127.1.2.3", "http://[::1]:9999", "http://localhost:9999"} {
+		if _, err := New(config.EndpointSpec{Transport: "openai", Endpoint: ep, Model: "m", APIKey: "k"}, 0); err != nil {
+			t.Errorf("loopback http with a key should be allowed for %s: %v", ep, err)
+		}
+	}
+}
+
+// Retries count toward the cap, so they must not push a run past it.
+func TestFingerprintCapIncludesRetries(t *testing.T) {
+	db, err := fingerprint.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt64(&calls, 1) == 2 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"usage":{"prompt_tokens":42}}`))
+	}))
+	defer srv.Close()
+	client, err := New(config.EndpointSpec{Endpoint: srv.URL, Model: "m", Transport: "openai"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = Fingerprint(context.Background(), client, db, Options{MaxRequests: 2})
+	if calls != 2 || client.Requests() != 2 {
+		t.Fatalf("cap 2 exceeded: calls=%d requests=%d", calls, client.Requests())
+	}
+}
+
+// Once the alternate token-cap shape is accepted, later probes use it
+// directly instead of paying for the same rejection every time.
+func TestAltShapeRemembered(t *testing.T) {
+	var calls int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&calls, 1)
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if _, ok := body["max_tokens"]; ok {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"Unsupported parameter: 'max_tokens'. Use 'max_completion_tokens' instead."}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"usage":{"prompt_tokens":42}}`))
+	}))
+	defer srv.Close()
+	client, err := New(config.EndpointSpec{Endpoint: srv.URL, Model: "custom-deployment", Transport: "openai"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		obs, err := client.Send(context.Background(), fingerprint.Probe{ID: "p", Text: "hello"})
+		if err != nil || !obs.HasUsage {
+			t.Fatalf("send %d: obs=%+v err=%v", i, obs, err)
+		}
+	}
+	if calls != 4 {
+		t.Fatalf("calls = %d, want 4 (one rejection, then the accepted shape)", calls)
+	}
+}
+
+func TestSnippetKeepsUTF8Valid(t *testing.T) {
+	if s := snippet([]byte("a" + strings.Repeat("错", 100))); !utf8.ValidString(s) {
+		t.Fatalf("snippet split a multi-byte character: %q", s)
 	}
 }
 

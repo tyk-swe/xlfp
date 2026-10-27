@@ -188,6 +188,34 @@ func TestAuditWithLiveOfficial(t *testing.T) {
 	}
 }
 
+// Requests already sent to a failing official endpoint are still spent.
+func TestAuditOfficialFailureCountsRequests(t *testing.T) {
+	cleanEnv(t)
+	target := openAIStyleMock(t, "deepseek-v3", 6)
+	official := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(official.Close)
+	code, out, _ := runCLI(t, "audit", "--target-url", target.URL, "--official-url", official.URL,
+		"--model", "deepseek-chat", "--claim", "deepseek", "--json")
+	var parsed struct {
+		ReasonCode    string `json:"reason_code"`
+		RequestsSpent int    `json:"requests_spent"`
+		Target        struct {
+			RequestsSpent int `json:"requests_spent"`
+		} `json:"target"`
+	}
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("code %d out %q: %v", code, out, err)
+	}
+	if code != exitInconclusive || parsed.ReasonCode != "official_failed" {
+		t.Fatalf("code %d reason_code %q", code, parsed.ReasonCode)
+	}
+	if parsed.RequestsSpent != parsed.Target.RequestsSpent+1 {
+		t.Fatalf("requests_spent %d, want target %d + 1 official", parsed.RequestsSpent, parsed.Target.RequestsSpent)
+	}
+}
+
 func stubStdin(t *testing.T, tty bool, input string) {
 	t.Helper()
 	oldReader, oldTTY := stdinReader, stdinIsTTY

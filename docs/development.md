@@ -7,7 +7,7 @@ go build -o xlfp .
 gofmt -l .
 go vet ./...
 go test -race -count=1 ./...
-sh -n install.sh scripts/install-skill.sh
+sh -n install.sh && sh -n scripts/install-skill.sh
 ```
 
 Releases are cut by tagging `v*`, which runs the GoReleaser workflow

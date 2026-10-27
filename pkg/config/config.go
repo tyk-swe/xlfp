@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -63,7 +64,8 @@ func fileExists(p string) bool {
 // Load reads the config at path. An empty path means "use DefaultPath if a
 // file exists, else an empty config". An explicit missing file is an error.
 // A config file that stores literal API keys must not be group/world
-// readable (mode & 0o077 must be zero).
+// readable (mode & 0o077 must be zero). Windows has no such mode bits
+// (Go always reports 0666 or 0444 there), so the check is skipped on it.
 func Load(path string) (*Config, error) {
 	if path == "" {
 		p, ok := DefaultPath()
@@ -90,7 +92,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config %s: %w", path, err)
 	}
 	cfg.path = path
-	if cfg.hasLiteralKeys() && info.Mode().Perm()&0o077 != 0 {
+	if runtime.GOOS != "windows" && cfg.hasLiteralKeys() && info.Mode().Perm()&0o077 != 0 {
 		return nil, fmt.Errorf("config %s stores API keys but is group/world accessible (mode %04o); run: chmod 600 %s", path, info.Mode().Perm(), path)
 	}
 	return &cfg, nil

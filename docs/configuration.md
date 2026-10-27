@@ -74,6 +74,8 @@ them:
 Use a profile with `--profile provider-x` (uncover) or
 `--target-profile` / `--official-profile` (audit). A config file that
 stores literal `api_key` values must not be group/world readable —
-`xlfp` refuses it until you run `chmod 600`. Keys are never printed,
+on Linux and macOS `xlfp` refuses it until you run `chmod 600`
+(Windows has no such permission bits, so the check does not apply
+there). Keys are never printed,
 logged, or included in either output format; endpoints are displayed
 with userinfo and query strings stripped.

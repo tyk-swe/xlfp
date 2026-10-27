@@ -10,10 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tyk-swe/xlfp/pkg/config"
 	"github.com/tyk-swe/xlfp/pkg/fingerprint"
@@ -25,6 +27,7 @@ type Client struct {
 	HTTP     *http.Client
 	URL      string // fully built request URL (no key in it, ever)
 	requests int
+	altShape bool // OpenAI token-cap shape the endpoint accepted last
 }
 
 // New builds a probing client for a resolved endpoint spec.
@@ -75,7 +78,11 @@ func sanitizedEndpoint(raw string) string {
 
 func isLoopbackHost(host string) bool {
 	host = strings.ToLower(strings.Trim(host, "[]"))
-	return host == "localhost" || strings.HasSuffix(host, ".localhost") || host == "::1" || strings.HasPrefix(host, "127.")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // joinResource appends a transport resource to a base path: an empty path
@@ -138,7 +145,7 @@ func BuildURL(spec config.EndpointSpec) (string, error) {
 			return "", fmt.Errorf("invalid endpoint %s: streaming Gemini URLs are not supported; use the base URL", sanitizedEndpoint(raw))
 		}
 		if strings.Contains(path, ":generateContent") {
-			if m := geminiModelInPath(path); m != "" && spec.Model != "" && m != strings.TrimPrefix(spec.Model, "models/") && "models/"+m != spec.Model {
+			if m := geminiModelInPath(path); m != "" && spec.Model != "" && m != strings.TrimPrefix(strings.TrimPrefix(spec.Model, "models/"), "tunedModels/") {
 				return "", fmt.Errorf("endpoint %s already names model %q, conflicting with --model %q", sanitizedEndpoint(raw), m, spec.Model)
 			}
 		} else {
@@ -216,14 +223,22 @@ func waitRetry(ctx context.Context, d time.Duration) error {
 // Send sends one probe text and returns its observation. Transient
 // failures (429/502/503/504 and transport errors) are retried once, and
 // an OpenAI parameter-shape rejection is retried once with the alternate
-// token-cap shape. Every HTTP attempt counts toward Client.Requests.
+// token-cap shape, which later probes then start with. Every HTTP
+// attempt counts toward Client.Requests.
 func (c *Client) Send(ctx context.Context, p fingerprint.Probe) (fingerprint.Observation, error) {
-	altShape := false
+	return c.send(ctx, p, 0)
+}
+
+// send is Send with at most maxAttempts HTTP attempts (<= 0: no limit);
+// retries that would exceed the limit are skipped.
+func (c *Client) send(ctx context.Context, p fingerprint.Probe, maxAttempts int) (fingerprint.Observation, error) {
+	flipped := false
 	retriedTransient := false
-	for attempt := 0; ; attempt++ {
-		obs, raw, header, err := c.sendOnce(ctx, p, altShape)
+	for attempt := 1; ; attempt++ {
+		obs, raw, header, err := c.sendOnce(ctx, p, c.altShape)
+		canRetry := maxAttempts <= 0 || attempt < maxAttempts
 		if err != nil {
-			if !retriedTransient && ctx.Err() == nil {
+			if canRetry && !retriedTransient && ctx.Err() == nil {
 				retriedTransient = true
 				if werr := waitRetry(ctx, 250*time.Millisecond); werr == nil {
 					continue
@@ -231,11 +246,12 @@ func (c *Client) Send(ctx context.Context, p fingerprint.Probe) (fingerprint.Obs
 			}
 			return fingerprint.Observation{}, err
 		}
-		if c.Spec.Transport == config.TransportOpenAI && !altShape && obs.HTTPStatus == http.StatusBadRequest && paramShapeRejected(raw) {
-			altShape = true
+		if canRetry && c.Spec.Transport == config.TransportOpenAI && !flipped && obs.HTTPStatus == http.StatusBadRequest && paramShapeRejected(raw) {
+			c.altShape = !c.altShape
+			flipped = true
 			continue
 		}
-		if transientStatus(obs.HTTPStatus) && !retriedTransient {
+		if canRetry && transientStatus(obs.HTTPStatus) && !retriedTransient {
 			retriedTransient = true
 			if werr := waitRetry(ctx, retryDelay(header)); werr == nil {
 				continue
@@ -475,7 +491,11 @@ func parseUsage(transport string, raw []byte) (int, bool) {
 func snippet(raw []byte) string {
 	s := strings.Join(strings.Fields(string(raw)), " ")
 	if len(s) > 200 {
-		s = s[:200] + "…"
+		cut := 200
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = s[:cut] + "…"
 	}
 	return s
 }
@@ -544,7 +564,7 @@ func Fingerprint(ctx context.Context, c *Client, db *fingerprint.DB, opts Option
 			if spent() >= maxReq {
 				break
 			}
-			o, err := c.Send(ctx, p)
+			o, err := c.send(ctx, p, maxReq-spent())
 			if opts.OnProbe != nil {
 				opts.OnProbe(spent())
 			}

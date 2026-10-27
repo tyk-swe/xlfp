@@ -98,7 +98,7 @@ else
     *",codex,"*) install_into "codex" "$HOME/.codex/skills" ;;
   esac
   case ",$TARGET," in
-    *",Muse,"*) install_into "Muse" "$HOME/.muse/skills" ;;
+    *",Muse,"*) install_into "Muse" "$HOME/.Muse/skills" ;;
   esac
   case ",$TARGET," in
     *",muse,"*) print_muse_instructions ;;
@@ -107,7 +107,7 @@ else
     detected=0
     [ -d "$HOME/.hermes" ] && { install_into "hermes" "$HOME/.hermes/skills"; detected=1; }
     [ -d "$HOME/.codex" ] && { install_into "codex" "$HOME/.codex/skills"; detected=1; }
-    [ -d "$HOME/.Muse" ] && { install_into "Muse" "$HOME/.muse/skills"; detected=1; }
+    [ -d "$HOME/.Muse" ] && { install_into "Muse" "$HOME/.Muse/skills"; detected=1; }
     command -v muse >/dev/null 2>&1 && { print_muse_instructions; detected=1; }
     [ "$detected" -eq 1 ] || die "no supported agent harness detected (~/.hermes, ~/.codex, ~/.Muse, or the muse CLI). Use --target <name> to create one, or --dest DIR for another SKILL.md tool."
   elif [ "$installed_any" -eq 0 ] && [ "$refused_any" -eq 0 ]; then

@@ -25,7 +25,7 @@ jobs:
       - name: Build
         run: go build -o xlfp . && ./xlfp version
       - name: Shell scripts syntax
-        run: sh -n install.sh scripts/install-skill.sh
+        run: sh -n install.sh && sh -n scripts/install-skill.sh
       - name: GoReleaser config
         uses: goreleaser/goreleaser-action@v6
         with:

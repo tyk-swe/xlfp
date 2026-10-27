@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -95,7 +96,14 @@ func TestConfigKeyFallbackAndFlagOverride(t *testing.T) {
 
 func TestLooseConfigPermissionsRejected(t *testing.T) {
 	clearKeyEnv(t)
-	if _, err := Load(writeConfig(t, profileCfg, 0o644)); err == nil {
+	_, err := Load(writeConfig(t, profileCfg, 0o644))
+	if runtime.GOOS == "windows" {
+		// Windows reports 0666 for every writable file; there are no
+		// group/world bits to check.
+		if err != nil {
+			t.Fatalf("config with keys rejected on windows: %v", err)
+		}
+	} else if err == nil {
 		t.Fatal("world-readable config with literal keys must be rejected")
 	}
 	// Same permissions without any literal key are fine.

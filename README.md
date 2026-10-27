@@ -140,7 +140,7 @@ From a clone, install it into your agent's skill directory:
 
 ```bash
 scripts/install-skill.sh                 # every detected harness
-scripts/install-skill.sh --target hermes # or codex / claude / muse
+scripts/install-skill.sh --target hermes # or codex / Muse / muse
 scripts/install-skill.sh --dry-run       # show what would happen
 ```
 
