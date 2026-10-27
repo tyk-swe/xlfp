@@ -1,0 +1,56 @@
+version: 2
+project_name: xlfp
+
+builds:
+  - id: xlfp
+    main: .
+    binary: xlfp
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: xlfp
+    ids: [xlfp]
+    # Version-free names keep `releases/latest/download/<asset>` stable
+    # for install.sh / install.ps1.
+    name_template: "xlfp_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - NOTICE.md
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+release:
+  header: |
+    ## Install
+
+    Linux/macOS:
+
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/tyk-swe/xlfp/main/install.sh | sh
+    ```
+
+    Windows (PowerShell):
+
+    ```powershell
+    irm https://raw.githubusercontent.com/tyk-swe/xlfp/main/install.ps1 | iex
+    ```
+
+    Or download an archive below and verify it against `checksums.txt`.
+    Pre-release: results are strong tokenizer evidence, not endpoint-certified
+    proof (see README "How it works").
