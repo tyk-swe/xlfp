@@ -91,6 +91,22 @@ func TestInstallScript(t *testing.T) {
 		}
 	})
 
+	t.Run("directory destination fails closed", func(t *testing.T) {
+		srv := serve(goodChecksums)
+		defer srv.Close()
+		installDir := filepath.Join(t.TempDir(), "bin")
+		if err := os.MkdirAll(filepath.Join(installDir, "xlfp"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		out, err := runInstaller(t, srv.URL, installDir)
+		if err == nil {
+			t.Fatalf("installer reported success for a directory destination: %s", out)
+		}
+		if _, err := os.Stat(filepath.Join(installDir, "xlfp", "xlfp")); !os.IsNotExist(err) {
+			t.Fatal("binary incorrectly installed inside destination directory")
+		}
+	})
+
 	t.Run("tampered checksum fails closed", func(t *testing.T) {
 		bad := []byte(goodChecksums)
 		if bad[0] == '0' {

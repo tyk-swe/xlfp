@@ -19,9 +19,10 @@ Hard limits you must respect when reporting: results are
 **family-level evidence, never proof of an exact model/checkpoint**;
 audit detects family substitution only, never quantization or
 degradation; Qwen and MiMo share one tokenizer and cannot be
-separated; Google/Claude can never be verdicts; an endpoint that
-fakes its usage numbers yields *inconclusive*, which is a valid
-final answer, not a failure to retry around.
+separated; Google/Claude can never be verdicts. Missing or implausible
+usage yields *inconclusive*, a valid final answer, not a failure to retry
+around. Plausible fabricated counts can fool the fingerprint; confidence
+measures fit and does not authenticate a provider's reporting.
 
 ## 0. Make sure xlfp exists
 

@@ -53,6 +53,13 @@ type Observation struct {
 	Error        string `json:"error,omitempty"`
 }
 
+// UsableCount reports whether a successful observation carries usable usage.
+// HTTPStatus zero is allowed for locally constructed observations.
+func (o Observation) UsableCount() bool {
+	return o.HasUsage && o.PromptTokens > 0 && !o.Rejected && o.Error == "" &&
+		(o.HTTPStatus == 0 || (o.HTTPStatus >= 200 && o.HTTPStatus < 300))
+}
+
 // FamilyRank is the scored evidence for one candidate family.
 type FamilyRank struct {
 	Family     string   `json:"family"`
@@ -135,7 +142,7 @@ func (db *DB) Rank(obs []Observation, minConfidence float64) Result {
 			specialOutcome[o.ProbeID] = o
 			continue
 		}
-		if o.HasUsage && o.PromptTokens > 0 && !o.Rejected {
+		if o.UsableCount() {
 			usable = append(usable, obsAt{i, o})
 		}
 	}
@@ -186,7 +193,7 @@ func (db *DB) Rank(obs []Observation, minConfidence float64) Result {
 			expectReject[rp] = true
 		}
 		for id, o := range specialOutcome {
-			if !o.Rejected && !o.HasUsage {
+			if o.Error != "" || (!o.Rejected && !o.UsableCount()) {
 				continue
 			}
 			want, got := expectReject[id], o.Rejected
@@ -235,7 +242,8 @@ func (db *DB) Rank(obs []Observation, minConfidence float64) Result {
 	var denom float64
 	weights := make([]float64, len(allFams))
 	for i, s := range allFams {
-		weights[i] = math.Exp(-s.mae * float64(len(usable)) / 4)
+		// Shift by the best score so at least one weight is always 1.
+		weights[i] = math.Exp(-(s.mae - allFams[0].mae) * float64(len(usable)) / 4)
 		denom += weights[i]
 	}
 	res.Rankings, res.Unverified = []FamilyRank{}, []FamilyRank{}
@@ -247,7 +255,7 @@ func (db *DB) Rank(obs []Observation, minConfidence float64) Result {
 		fr := FamilyRank{
 			Family: s.entry.Family, Display: s.entry.Display, EntryID: s.entry.ID,
 			Tokenizer: s.entry.Tokenizer, Verified: famVerified[s.entry.Family],
-			Confidence: round3(conf), MAE: round3(s.mae), Overhead: round3(s.overhead),
+			Confidence: conf, MAE: round3(s.mae), Overhead: round3(s.overhead),
 			MaxResid: round3(s.maxResid), Slope: round3(s.slope),
 		}
 		for _, o := range db.Entries {
@@ -289,7 +297,7 @@ func (db *DB) Rank(obs []Observation, minConfidence float64) Result {
 	degenerate := (expRange >= 6 && obsRange <= math.Max(1, expRange/4)) || (expRange >= 10 && obsRange < expRange/2)
 	sharedTie := ""
 	for _, r := range res.Rankings[1:] {
-		if r.MAE == top.MAE && contains(top.SharedWith, r.Family) {
+		if contains(top.SharedWith, r.Family) {
 			sharedTie = r.Family
 			break
 		}

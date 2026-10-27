@@ -7,6 +7,8 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -85,17 +87,23 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	var cfg Config
+	var cfg *Config
 	dec := json.NewDecoder(strings.NewReader(string(raw)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("config %s: %w", path, err)
 	}
+	if cfg == nil {
+		return nil, fmt.Errorf("config %s: expected a JSON object", path)
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		return nil, fmt.Errorf("config %s: unexpected data after JSON object", path)
+	}
 	cfg.path = path
 	if runtime.GOOS != "windows" && cfg.hasLiteralKeys() && info.Mode().Perm()&0o077 != 0 {
 		return nil, fmt.Errorf("config %s stores API keys but is group/world accessible (mode %04o); run: chmod 600 %s", path, info.Mode().Perm(), path)
 	}
-	return &cfg, nil
+	return cfg, nil
 }
 
 func (c *Config) hasLiteralKeys() bool {
@@ -174,6 +182,9 @@ func (s EndpointSpec) String() string {
 	return fmt.Sprintf("{endpoint:%s model:%s transport:%s%s}", s.Endpoint, s.Model, s.Transport, key)
 }
 
+// GoString also protects %#v formatting, which does not call String.
+func (s EndpointSpec) GoString() string { return s.String() }
+
 // Resolve merges flags > environment > config profile > config defaults.
 // For the API key the environment wins over the config file. An
 // empty resolved key is allowed (keyless local endpoints).
@@ -213,32 +224,49 @@ func (c *Config) Resolve(ov Overrides) (EndpointSpec, error) {
 	// Bind config credentials to their source endpoint before overrides.
 	// An inherited default credential keeps the default endpoint binding.
 	if keyProfile != nil {
-		boundHost := hostname(keyProfile.Endpoint)
-		if boundHost == "" {
-			return EndpointSpec{}, fmt.Errorf("config key has no endpoint host binding; configure an endpoint or use --api-key-env explicitly")
+		boundOrigin := origin(keyProfile.Endpoint)
+		if boundOrigin == "" {
+			return EndpointSpec{}, fmt.Errorf("config key has no endpoint origin binding; configure an endpoint or use --api-key-env explicitly")
 		}
-		if boundHost != hostname(spec.Endpoint) {
-			return EndpointSpec{}, fmt.Errorf("config key is bound to endpoint host %q; refusing to send it to %q (use --api-key-env or a matching profile)", boundHost, hostname(spec.Endpoint))
+		if boundOrigin != origin(spec.Endpoint) {
+			return EndpointSpec{}, fmt.Errorf("config key is bound to endpoint origin %q; refusing to send it to %q (use --api-key-env or a matching profile)", boundOrigin, origin(spec.Endpoint))
 		}
 	}
 	spec.APIKey = strings.TrimSpace(key)
 	return spec, nil
 }
 
-func hostname(endpoint string) string {
+// origin binds credentials to a scheme, canonical host, and effective port.
+// Paths may change without allowing a different service on the same host.
+func origin(endpoint string) string {
 	u, err := url.Parse(strings.TrimSpace(endpoint))
-	if err != nil {
+	if err != nil || u.Hostname() == "" || u.User != nil {
 		return ""
 	}
-	return strings.ToLower(u.Hostname())
+	scheme := strings.ToLower(u.Scheme)
+	port := u.Port()
+	switch scheme {
+	case "https":
+		if port == "" {
+			port = "443"
+		}
+	case "http":
+		if port == "" {
+			port = "80"
+		}
+	default:
+		return ""
+	}
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	return scheme + "://" + net.JoinHostPort(host, port)
 }
 
-// resolveKey returns the API key and its source profile for host binding.
+// resolveKey returns the API key and its source profile for origin binding.
 // Explicit environment keys and official ambient keys have no profile binding.
 func (c *Config) resolveKey(ov Overrides, prof Profile, endpoint, transport string, envFor func(string) string) (string, *Profile, error) {
 	// Explicitly named environment variable (flag): must be set.
 	if ov.APIKeyEnv != "" {
-		v := os.Getenv(ov.APIKeyEnv)
+		v := strings.TrimSpace(os.Getenv(ov.APIKeyEnv))
 		if v == "" {
 			return "", nil, fmt.Errorf("environment variable %s named by --api-key-env is empty or unset", ov.APIKeyEnv)
 		}
@@ -250,16 +278,14 @@ func (c *Config) resolveKey(ov Overrides, prof Profile, endpoint, transport stri
 		return v, nil, nil
 	}
 	if prof.APIKeyEnv != "" {
-		if v := os.Getenv(prof.APIKeyEnv); v != "" {
+		if v := strings.TrimSpace(os.Getenv(prof.APIKeyEnv)); v != "" {
 			source := &c.Profile
 			if c.Profiles[ov.Profile].APIKeyEnv != "" {
 				source = &prof
 			}
 			return v, source, nil
 		}
-		if ov.Profile != "" {
-			return "", nil, fmt.Errorf("environment variable %s named by profile %q (api_key_env) is empty or unset", prof.APIKeyEnv, ov.Profile)
-		}
+		return "", nil, fmt.Errorf("environment variable %s named by config (api_key_env) is empty or unset", prof.APIKeyEnv)
 	}
 	// Provider-standard ambient keys (OPENAI_API_KEY etc.) are credentials
 	// for the official service, and xlfp exists to probe untrusted
@@ -330,12 +356,12 @@ func hostMatches(host string, domains []string) bool {
 }
 
 // IsOfficialHost reports whether the endpoint is the official HTTPS API
-// host for the transport (exact host only, never a substring of the
-// path/query, so a lookalike URL cannot select a credential; cleartext
+// host on the default HTTPS port for the transport (exact host only,
+// never a substring of the path/query, so a lookalike URL cannot select a credential; cleartext
 // http never qualifies, so ambient keys never travel unencrypted).
 func IsOfficialHost(endpoint, transport string) bool {
 	u, err := url.Parse(strings.TrimSpace(endpoint))
-	if err != nil || u.Hostname() == "" || !strings.EqualFold(u.Scheme, "https") {
+	if err != nil || u.Hostname() == "" || u.User != nil || !strings.EqualFold(u.Scheme, "https") || (u.Port() != "" && u.Port() != "443") {
 		return false
 	}
 	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))

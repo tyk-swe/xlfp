@@ -26,14 +26,29 @@ die() { printf 'install-skill: %s\n' "$*" >&2; exit 1; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --target) TARGET="${2:-}"; shift 2 ;;
-    --dest) DEST="${2:-}"; shift 2 ;;
+    --target|--dest)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 requires a non-empty value"
+      case "$2" in --*) die "$1 requires a value, not $2" ;; esac
+      if [ "$1" = --target ]; then TARGET="$2"; else DEST="$2"; fi
+      shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     --force) FORCE=1; shift ;;
     -h|--help) sed -n '2,16p' "$0" 2>/dev/null || say "usage: install-skill.sh [--target hermes|codex|Muse|muse|all] [--dest DIR] [--dry-run] [--force]"; exit 0 ;;
     *) die "unknown argument: $1 (try --help)" ;;
   esac
 done
+
+# Validate the entire target list before installing any part of it.
+if [ -n "$TARGET" ] && [ "$TARGET" != all ]; then
+  case ",$TARGET," in *",,"*) die "empty --target entry" ;; esac
+  remaining="$TARGET"
+  while [ -n "$remaining" ]; do
+    item="${remaining%%,*}"
+    case "$item" in hermes|codex|Muse|muse) ;; *) die "unknown --target: $item (want hermes, codex, Muse, muse, or all)" ;; esac
+    [ "$remaining" != "$item" ] || break
+    remaining="${remaining#*,}"
+  done
+fi
 
 # --- Locate the skill source: this checkout, else download. ---
 SRC_DIR=""
@@ -52,7 +67,7 @@ else
     die "could not download SKILL.md. If the repository is still private, clone it and run scripts/install-skill.sh from the clone."
   fi
 fi
-[ -f "$SRC_DIR/SKILL.md" ] || die "SKILL.md not found in $SRC_DIR"
+[ -s "$SRC_DIR/SKILL.md" ] || die "SKILL.md not found in $SRC_DIR"
 
 installed_any=0
 refused_any=0
@@ -129,5 +144,6 @@ else
   fi
 fi
 
+[ "$refused_any" -eq 0 ] || die "one or more skills were not installed because they differ (use --force to replace)"
 [ "$installed_any" -eq 1 ] || die "nothing was installed"
 say "Done. Restart your agent (or its session) so it picks up the xlfp skill."

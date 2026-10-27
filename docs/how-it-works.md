@@ -60,9 +60,10 @@ Treat them as hints.
 - `audit` detects **family substitution**. It does not claim proof
   of quantization or degradation of a same-family backend; the
   optional target-vs-official divergence number is a signal only.
-- Endpoints that omit, estimate, scale, or fabricate usage produce
-  inconclusive results by design. A provider that actively fakes
-  token counts yields *inconclusive*, not a verdict.
+- Missing or implausible usage produces inconclusive results. These
+  plausibility checks cannot authenticate provider-reported counts:
+  an endpoint can fabricate a known tokenizer's counts and receive an
+  identified result. Confidence measures fit, not provider honesty.
 - A `MISMATCH` verdict is strong tokenizer evidence about the model
   family — it is not, on its own, proof of fraud. Verify before
   publishing claims about a provider.
