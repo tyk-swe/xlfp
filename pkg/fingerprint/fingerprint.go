@@ -35,7 +35,7 @@ type Entry struct {
 	Aliases      []string `json:"aliases"`
 }
 
-// DB is the embedded fingerprint database (PROJECT.md Q10).
+// DB is the embedded fingerprint database.
 type DB struct {
 	Version string  `json:"version"`
 	Note    string  `json:"note"`

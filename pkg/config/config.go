@@ -1,5 +1,5 @@
 // Package config resolves endpoints, models, transports and API keys from
-// flags, environment variables and a JSON config file (PROJECT.md Q9/Q13).
+// flags, environment variables and a JSON config file.
 // API keys are accepted from the environment or a config file only; there
 // is deliberately no literal --api-key flag value.
 package config
@@ -173,7 +173,7 @@ func (s EndpointSpec) String() string {
 }
 
 // Resolve merges flags > environment > config profile > config defaults.
-// For the API key the environment wins over the config file (Q13). An
+// For the API key the environment wins over the config file. An
 // empty resolved key is allowed (keyless local endpoints).
 func (c *Config) Resolve(ov Overrides) (EndpointSpec, error) {
 	prof, err := c.mergedProfile(ov.Profile)
@@ -241,7 +241,7 @@ func (c *Config) resolveKey(ov Overrides, prof Profile, endpoint, transport stri
 		}
 		return v, false, nil
 	}
-	// Environment wins over config (Q13): purpose env, profile-named env,
+	// Environment wins over config: purpose env, profile-named env,
 	// transport-standard env, then generic XLFP_API_KEY.
 	if v := envFor("API_KEY"); v != "" {
 		return v, false, nil

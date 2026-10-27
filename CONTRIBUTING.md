@@ -13,9 +13,10 @@ change clearly pays for one.
 
 ## Ground rules
 
-- Behavior is specified in [PROJECT.md](./PROJECT.md). Changes that
-  widen a v1 claim (exact checkpoints, degradation proof, defeating
-  actively fabricated usage) need a spec change first.
+- Behavior and claim limits are documented in
+  [docs/how-it-works.md](./docs/how-it-works.md). Changes that widen
+  a claim (exact checkpoints, degradation proof, defeating actively
+  fabricated usage) need maintainer agreement first.
 - Fingerprint verdicts are only rendered for verified families. Adding
   or promoting a family requires its generating tokenizer source in
   `tools/gen_db.py`, regenerated `pkg/fingerprint/db.json`, and updated
@@ -31,6 +32,6 @@ change clearly pays for one.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install tiktoken tokenizers huggingface_hub sentencepiece
+.venv/bin/pip install -r tools/requirements.txt
 .venv/bin/python tools/gen_db.py
 ```

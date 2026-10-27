@@ -57,7 +57,7 @@ func TestEnvWinsOverConfigKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	if spec.APIKey != "env-secret" {
-		t.Fatalf("key = %q, want env value to win over config (Q13)", spec.APIKey)
+		t.Fatalf("key = %q, want env value to win over config", spec.APIKey)
 	}
 	if spec.Endpoint != "https://provider.example" || spec.Model != "deepseek-chat" {
 		t.Fatalf("profile merge wrong: %+v", spec)

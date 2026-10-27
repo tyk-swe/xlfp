@@ -127,7 +127,7 @@ def main():
     db = {
         "version": "1.0.0",
         "note": "Raw-text counts; ranking fits a constant chat-template overhead per endpoint. "
-                "verified=false entries are scored for display but never rendered as verdicts (PROJECT.md Q5).",
+                "verified=false entries are scored for display but never rendered as verdicts.",
         "probes": PROBES,
         "entries": entries,
     }

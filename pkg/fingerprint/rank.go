@@ -28,9 +28,8 @@ const (
 	ReasonLowConfidence       = "low_confidence"
 )
 
-// Ranking thresholds. These are the implementation-stage values for the
-// tuning details left open by PROJECT.md Q8; they are deliberately
-// conservative so thin or tied evidence yields inconclusive (Q3).
+// Ranking thresholds. They are deliberately conservative so thin or
+// tied evidence yields inconclusive.
 const (
 	DefaultMinConfidence = 0.70 // minimum top confidence for a verdict
 	StopConfidence       = 0.90 // adaptive probing may stop at/above this
@@ -75,8 +74,8 @@ type Result struct {
 	TopFamily     string        `json:"top_family,omitempty"`
 	Reason        string        `json:"reason,omitempty"`
 	ReasonCode    string        `json:"reason_code,omitempty"` // stable machine-readable cause (see Reason* consts)
-	Rankings      []FamilyRank  `json:"rankings"`              // verified families only (Q5)
-	Unverified    []FamilyRank  `json:"unverified_rankings"`   // scored, never rendered as verdicts (Q5)
+	Rankings      []FamilyRank  `json:"rankings"`              // verified families only
+	Unverified    []FamilyRank  `json:"unverified_rankings"`   // scored, never rendered as verdicts
 	Observations  []Observation `json:"observations"`
 	RequestsSpent int           `json:"requests_spent"`
 	DBVersion     string        `json:"db_version"`
@@ -95,7 +94,7 @@ type entryScore struct {
 
 // Rank scores observations against the database. minConfidence <= 0 uses
 // DefaultMinConfidence. Ranking fits a constant per-endpoint overhead
-// (chat-template tokens, Q12) as the median of (observed - expected), then
+// (chat-template tokens) as the median of (observed - expected), then
 // measures the mean absolute residual (MAE). Confidence is a softmax over
 // exp(-MAE*n/4) across families, where n is the number of usable probes:
 // evidence accumulates per probe, so an exact fit over many probes is far
@@ -272,7 +271,7 @@ func (db *DB) Rank(obs []Observation, minConfidence float64) Result {
 	}
 
 	top := res.Rankings[0]
-	// Plausibility guard against fabricated usage (Q4): real tokenizers
+	// Plausibility guard against fabricated usage: real tokenizers
 	// produce counts that vary with probe content roughly as much as the
 	// best entry predicts. (Near-)constant counts fit a low-variance
 	// entry spuriously after the overhead shift, so they are declared
@@ -328,7 +327,7 @@ func (db *DB) Rank(obs []Observation, minConfidence float64) Result {
 	return res
 }
 
-// ShouldStop reports whether adaptive probing may stop after a stage (Q8).
+// ShouldStop reports whether adaptive probing may stop after a stage.
 func (r Result) ShouldStop() bool {
 	return r.Status == StatusIdentified && len(r.Rankings) > 0 && r.Rankings[0].Confidence >= StopConfidence && r.Rankings[0].MAE <= 1.0
 }

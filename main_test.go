@@ -151,7 +151,7 @@ func TestAuditMatchMismatchInconclusive(t *testing.T) {
 	if code != exitMismatch || !strings.Contains(out, "MISMATCH") {
 		t.Fatalf("mismatch: code %d out %q", code, out)
 	}
-	// Unverified claimed family cannot be judged (Q5).
+	// Unverified claimed family cannot be judged.
 	code, out, _ = runCLI(t, "audit", "--target-url", srv.URL, "--model", "gemini-2.0-flash", "--claim", "google")
 	if code != exitInconclusive || !strings.Contains(out, "INCONCLUSIVE") {
 		t.Fatalf("unverified claim: code %d out %q", code, out)

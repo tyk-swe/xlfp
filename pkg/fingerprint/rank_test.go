@@ -54,7 +54,7 @@ func TestDBLoadAndFamilies(t *testing.T) {
 }
 
 // TestDBSpotCounts pins a few generating-tokenizer counts (regression
-// fixture per Q12). If these change, tools/gen_db.py or a tokenizer source
+// fixture). If these change, tools/gen_db.py or a tokenizer source
 // changed and the DB regeneration must be reviewed deliberately.
 func TestDBSpotCounts(t *testing.T) {
 	db := loadDB(t)
@@ -153,7 +153,7 @@ func TestRankUnverifiedNeverVerdict(t *testing.T) {
 	}
 }
 
-// Regression (review, Q4): constant fabricated usage must never identify.
+// Regression: constant fabricated usage must never identify.
 // A constant count fitted a low-variance entry (OpenAI o200k on stage 1)
 // spuriously once the median overhead absorbed it.
 func TestRankConstantFakeUsageInconclusive(t *testing.T) {

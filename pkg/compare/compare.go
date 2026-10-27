@@ -2,7 +2,7 @@
 // fingerprinted family matches a provider's claim, and (when an official
 // endpoint was also probed) how far the target's observable behavior
 // diverges from it. Divergence is a signal only; this package never claims
-// proof of quantization or degradation (PROJECT.md Q6).
+// proof of quantization or degradation.
 package compare
 
 import (

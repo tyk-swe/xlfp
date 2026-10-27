@@ -1,6 +1,6 @@
 // Package probe sends fingerprint probes to LLM endpoints over three
 // transports (OpenAI-compatible, Anthropic Messages, Gemini native) and
-// reports their prompt-token usage (PROJECT.md Q1/Q2).
+// reports their prompt-token usage.
 package probe
 
 import (
@@ -482,7 +482,7 @@ func snippet(raw []byte) string {
 
 // Options controls a staged fingerprint run.
 type Options struct {
-	MaxRequests   int     // hard cap per endpoint (Q8); <=0 uses len(probes)
+	MaxRequests   int     // hard cap per endpoint; <=0 uses len(probes)
 	MinConfidence float64 // verdict threshold; <=0 uses fingerprint default
 	// OnProbe, when set, is called after each probe request completes
 	// with the number of requests spent so far in this run (retries
@@ -492,7 +492,7 @@ type Options struct {
 
 // Fingerprint probes an endpoint in adaptive stages: probes are sent one
 // stage at a time and staging stops early once the ranking is confidently
-// settled (Q8), the request cap is hit, or a whole stage produced no
+// settled, the request cap is hit, or a whole stage produced no
 // usable usage. A probe failure (transport error or HTTP >= 300) stops
 // probing; when enough usable counts were already collected, the partial
 // evidence is still ranked and returned with the failure noted, while a

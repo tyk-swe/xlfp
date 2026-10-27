@@ -1,6 +1,7 @@
 // Command xlfp (xo llm fingerprinter) identifies the model family behind
 // an LLM endpoint from its reported token usage, and audits whether a
-// provider's claimed family matches its fingerprint. See PROJECT.md.
+// provider's claimed family matches its fingerprint.
+// See docs/how-it-works.md.
 package main
 
 import (
@@ -25,7 +26,7 @@ import (
 // version is overridable at release time via -ldflags -X main.version=...
 var version = "0.1.0"
 
-// Exit codes (PROJECT.md Q11, values fixed at implementation stage):
+// Exit codes:
 const (
 	exitOK           = 0 // uncover: identified; audit: match
 	exitError        = 1 // operational or usage error
