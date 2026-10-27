@@ -29,7 +29,9 @@ exact checkpoint.
    that barely vary across probes are declared unreliable rather than
    identified. Special-token probes contribute acceptance/rejection
    evidence only (a 400/422 refusal); their counts never enter the
-   fit. Every inconclusive result carries a machine-stable
+   fit. Failed observations do not contribute counts to the fit; malformed,
+   fractional, negative, or overflowing usage values are not usable.
+   Every inconclusive result carries a machine-stable
    `reason_code` (JSON) alongside the technical `reason`.
 4. Only **source-verified** families can be rendered as verdicts, and
    an unverified family that fits clearly better than every
@@ -67,3 +69,8 @@ Treat them as hints.
 - A `MISMATCH` verdict is strong tokenizer evidence about the model
   family — it is not, on its own, proof of fraud. Verify before
   publishing claims about a provider.
+- In v0.1.5, an official audit baseline that fails after collecting
+  enough counts can still influence a verdict. Inspect the official
+  result with `--json` or `--verbose` and rerun if probing stopped early;
+  a failed baseline does not corroborate a verdict. See
+  [PR #3](https://github.com/tyk-swe/xlfp/pull/3) for the pending fix.

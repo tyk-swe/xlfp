@@ -24,7 +24,7 @@ import (
 )
 
 // version is overridable at release time via -ldflags -X main.version=...
-var version = "0.1.4"
+var version = "0.1.5"
 
 // Exit codes:
 const (

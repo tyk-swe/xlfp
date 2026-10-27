@@ -1,14 +1,22 @@
 # xlfp — xo llm fingerprinter
 
-**Find out which AI model family is really behind an API endpoint.**
+**Fingerprint the model family behind an LLM API — and check a provider's claim.**
 
-Some endpoints hide which model they run, and some providers quietly
-serve a different (often cheaper) model than the one they advertise.
-`xlfp` sends a few tiny test messages, looks at how the endpoint
-counts tokens, and matches that pattern against known model families
-(DeepSeek, Qwen, OpenAI, Mistral, GLM, MiMo, …). No knowledge of
-tokenizers needed: the output tells you the likely family, what it
-means, and what to do next — or honestly says "inconclusive."
+When a model name is hidden or a provider's claim needs a second look,
+`xlfp` gives you independent tokenizer evidence. It sends small test
+messages, compares the reported token counts with known model families,
+and explains the result. Use it to investigate an unfamiliar endpoint,
+check a provider's claimed family, or add a diagnostic to an agent workflow.
+
+- **Two ways to investigate:** `uncover` identifies a likely family;
+  `audit` compares the evidence with a claim, optionally using an official baseline.
+- **Built for real endpoints:** OpenAI-compatible, Anthropic, and Gemini
+  API shapes; a configurable request cap; human-readable and JSON output.
+- **Evidence with limits:** verified candidates include DeepSeek, Qwen,
+  OpenAI, Mistral, GLM, and MiMo. Ambiguous or unreliable evidence can
+  produce `INCONCLUSIVE` rather than a guess.
+
+[Get started](#your-first-check-2-minutes) · [Check a claim](#check-a-providers-claim-audit) · [How it works](./docs/how-it-works.md) · [What's new in 0.1.5](./CHANGELOG.md)
 
 What it can tell you:
 
@@ -40,7 +48,7 @@ irm https://raw.githubusercontent.com/tyk-swe/xlfp/main/install.ps1 | iex
 This downloads the right binary for your machine from the latest
 GitHub Release, verifies its SHA-256 checksum, and installs it to
 `~/.local/bin` (Windows: `%LOCALAPPDATA%\xlfp`). Set `XLFP_VERSION`
-to pin a release (e.g. `v0.1.4`) or `XLFP_INSTALL_DIR` to change the
+to pin a release (e.g. `v0.1.5`) or `XLFP_INSTALL_DIR` to change the
 destination.
 
 With Go 1.23+ you can also install or build from source:
@@ -120,6 +128,12 @@ guessed from the model name when possible (`deepseek-chat` →
 not, on its own, proof of fraud. Claims for not-yet-verifiable
 families (`google`, `claude`) return inconclusive immediately,
 without spending requests; use `uncover` to see their scored hints.
+
+In v0.1.5, an official baseline that fails after returning some usable
+counts can still contribute to a verdict. Inspect the official result
+with `--json` or `--verbose` and rerun if probing stopped early; do not
+treat a failed baseline as corroboration. A fix is pending in
+[PR #3](https://github.com/tyk-swe/xlfp/pull/3).
 
 ### Exit codes
 

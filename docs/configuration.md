@@ -10,7 +10,7 @@ other hostnames or gateways:
 | Transport | Request shape | Usage field read |
 |---|---|---|
 | `openai` (compatible) | `POST /v1/chat/completions` | `usage.prompt_tokens` |
-| `anthropic` | `POST /v1/messages` | `usage.input_tokens` |
+| `anthropic` | `POST /v1/messages` | `usage.input_tokens` plus cache creation/read input tokens, when present |
 | `gemini` | `POST /v1beta/models/<model>:generateContent` | `usageMetadata.promptTokenCount` |
 
 The endpoint value must include `http://` or `https://` and may be a host URL, a versioned base (`/v1`, `/v2`,
@@ -89,3 +89,18 @@ on Linux and macOS `xlfp` refuses it until you run `chmod 600`
 there). Keys are never printed,
 logged, or included in either output format; endpoints are displayed
 with userinfo and query strings stripped.
+
+## Troubleshooting
+
+- **No usable token counts:** check the model and endpoint, and select
+  the native transport explicitly for an Anthropic or Gemini gateway.
+  The endpoint must return prompt-token usage for the relevant API shape.
+- **A named key variable is empty:** set the variable named by
+  `--api-key-env` or `api_key_env`; xlfp will not silently fall back to
+  a different credential.
+- **A config key is refused after an endpoint override:** its configured
+  origin must match the destination. Use a matching profile or explicitly
+  opt in with `--api-key-env` or an `XLFP_*_API_KEY` variable.
+- **Need evidence for a script:** add `--json`; use exit code 2 for an
+  inconclusive result and exit code 3 for an audit mismatch. See the
+  [exit-code table](../README.md#exit-codes).
