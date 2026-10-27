@@ -52,5 +52,5 @@ release:
     ```
 
     Or download an archive below and verify it against `checksums.txt`.
-    Pre-release: results are strong tokenizer evidence, not endpoint-certified
-    proof (see README "How it works").
+    Results identify the model family from tokenizer evidence; they do
+    not prove an exact model version (see the README).

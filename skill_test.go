@@ -36,6 +36,9 @@ func TestSkillFile(t *testing.T) {
 	if fields["name"] != "xlfp" {
 		t.Errorf("name = %q, want %q (must match directory name)", fields["name"], "xlfp")
 	}
+	if fields["license"] != "GPL-3.0-only" {
+		t.Errorf("license = %q, want GPL-3.0-only (must match LICENSE)", fields["license"])
+	}
 	if desc := fields["description"]; desc == "" || len(desc) > 1024 {
 		t.Errorf("description length %d, want 1..1024", len(desc))
 	}

@@ -1,6 +1,7 @@
 # Third-party notices and data provenance
 
-`xlfp` itself is MIT-licensed (see [LICENSE](./LICENSE)). This project
+`xlfp` itself is licensed under GPL-3.0-only (see
+[LICENSE](./LICENSE)). Copyright (C) 2026 tyk-swe. This project
 is an independent diagnostic tool and is **not affiliated with, endorsed
 by, or sponsored by** OpenAI, Anthropic, Google, Alibaba (Qwen),
 DeepSeek, Mistral AI, Zhipu AI (GLM), or Xiaomi (MiMo). Product and
@@ -13,9 +14,9 @@ measured.
 project's own probe strings — no tokenizer vocabularies, merge tables,
 or model weights are redistributed. Counts were computed with
 `tools/gen_db.py` from the sources below. Every download is pinned to a
-revision and verified by SHA-256 in the generator. Before a public
-release, recheck each source repository's current license/terms; model
-repository terms may differ from code licenses.
+revision and verified by SHA-256 in the generator. Model-repository
+terms may differ from code licenses; only the derived integer counts
+are shipped here.
 
 | Entry | Source | Pinned revision (short) | File SHA-256 (short) |
 |---|---|---|---|

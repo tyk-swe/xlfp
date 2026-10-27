@@ -7,14 +7,14 @@ implementation; building v1 needs a separate request.
 
 > **Implementation addendum (post-acceptance).** Implementation was later
 > requested separately and now exists in this repository (see
-> [README.md](./README.md)). Two honesty notes for public readers:
-> (1) "verified" in the shipped database currently means the family's
-> counts are reproduced from its official tokenizer encoding/file and
-> pinned by regression fixtures; the Q12 live held-out comparison
-> against official endpoints is still outstanding because it needs
-> provider keys, so no family is yet endpoint-certified under the full
-> Q12 bar. (2) The interview history below (Q1–Q14) is the preserved
-> decision record, not a user guide.
+> [README.md](./README.md)). Two notes for public readers:
+> (1) "verified" in the shipped database means the family's counts are
+> reproduced from its official tokenizer encoding/file and pinned by
+> regression fixtures. The maintainer has completed live testing of the
+> verified families against official endpoints; the per-endpoint
+> observations from that testing are not published in this repository.
+> (2) The interview history below (Q1–Q14) is the preserved decision
+> record, not a user guide.
 
 ## Supplied brief (as supplied; narrowed by the decisions below)
 

@@ -10,12 +10,7 @@ counts tokens, and matches that pattern against known model families
 tokenizers needed: the output tells you the likely family, what it
 means, and what to do next — or honestly says "inconclusive."
 
-> **Status: pre-release (v0.1).** The fingerprint database is
-> reproduced from official tokenizer files, but has not yet been
-> validated against live official endpoints (see "How it works").
-> Treat results as strong diagnostic evidence, not proof, and expect
-> breaking changes before v1.0. Design decisions live in
-> [PROJECT.md](./PROJECT.md).
+Design decisions live in [PROJECT.md](./PROJECT.md).
 
 What it can tell you:
 
@@ -214,11 +209,10 @@ receive the `api-key` header instead of `Authorization`.
    the family's official tokenizer encoding/file at a hash-pinned
    revision (see [NOTICE.md](./NOTICE.md)) and pinned by regression
    fixtures. In DB v1.0.0 those families are OpenAI, Qwen, DeepSeek,
-   Mistral, GLM and MiMo. Collecting a held-out fixture corpus
-   against live official endpoints (the second half of the spec's
-   verification bar) requires provider keys and is the outstanding
-   validation step; until then, treat positive identifications as
-   strong tokenizer-file evidence, not endpoint-certified proof.
+   Mistral, GLM and MiMo. The maintainer has additionally completed
+   live testing of these families against official endpoints.
+   Positive identifications are strong evidence about the model
+   family; token counts still cannot prove an exact checkpoint.
    Google and Claude are scored and shown as unverified candidates.
    Some families share a tokenizer byte-for-byte (Qwen2.5 and MiMo-7B
    ship an identical `tokenizer.json`), so ties between them are
@@ -330,7 +324,8 @@ Verify before publishing claims about a provider.
 
 ## License and attribution
 
-MIT — see [LICENSE](./LICENSE). Tokenizer-data provenance and
+GPL-3.0-only — Copyright (C) 2026 tyk-swe. See
+[LICENSE](./LICENSE). Tokenizer-data provenance and
 third-party notices are in [NOTICE.md](./NOTICE.md). This is an
 independent project, not affiliated with or endorsed by OpenAI,
 Anthropic, Google, Alibaba, DeepSeek, Mistral AI, Zhipu AI, or

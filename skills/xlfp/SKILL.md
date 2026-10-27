@@ -1,7 +1,7 @@
 ---
 name: xlfp
 description: Identify the true model family behind an unknown or "stealth" LLM endpoint, and audit third-party providers for silent model substitution, using the xlfp CLI (tokenizer fingerprinting from reported token usage). Use when the user asks what model an endpoint really is, whether a provider swapped or substituted models, or wants to verify a claimed model family.
-license: MIT
+license: GPL-3.0-only
 compatibility: Requires the xlfp binary on PATH (install commands in the body), network access to the endpoint being checked, and an API key provided through environment variables.
 ---
 
