@@ -239,6 +239,26 @@ func TestBuildURLErrors(t *testing.T) {
 	}
 }
 
+func TestCredentialQueryParametersRejected(t *testing.T) {
+	for _, query := range []string{
+		"api-key=DUMMY-SECRET", "API-KEY=DUMMY-SECRET", "api%2Dkey=DUMMY-SECRET",
+		"access-token=DUMMY-SECRET", "x-api-key=DUMMY-SECRET", "x-goog-api-key=DUMMY-SECRET",
+		"key=DUMMY-SECRET;other=value", "other=%zz&key=DUMMY-SECRET",
+	} {
+		for _, scheme := range []string{"http", "https"} {
+			t.Run(scheme+"/"+query, func(t *testing.T) {
+				_, err := New(config.EndpointSpec{Endpoint: scheme + "://provider.example/v1?" + query, Model: "m", Transport: "openai"}, 0)
+				if err == nil {
+					t.Fatal("URL credential accepted, including without a separately resolved API key")
+				}
+				if strings.Contains(err.Error(), "DUMMY-SECRET") {
+					t.Fatalf("URL credential leaked in error: %v", err)
+				}
+			})
+		}
+	}
+}
+
 func TestCleartextKeyRejectsLocalhostSubdomains(t *testing.T) {
 	for _, endpoint := range []string{"http://dev.localhost", "http://nested.dev.localhost:8080", "http://DEV.LOCALHOST"} {
 		if _, err := New(config.EndpointSpec{Endpoint: endpoint, Model: "m", Transport: "openai", APIKey: "dummy-key"}, 0); err == nil {
@@ -390,6 +410,37 @@ func TestErrorBodyKeyRedacted(t *testing.T) {
 	}
 }
 
+func TestErrorBodyEscapedKeyRedacted(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusOK} {
+		for name, body := range map[string]string{
+			"escaped slash":  `{"error":{"message":"invalid key sk-dummy\/secret"}}`,
+			"unicode escape": `{"error":"invalid key \u0073k-dummy/secret"}`,
+			"nested detail":  `{"error":{"details":[{"credential":"sk-dummy\/secret"}]}}`,
+			"member name":    `{"error":{"sk-dummy\/secret":"invalid key"}}`,
+			"large number":   `{"error":{"credential":"sk-dummy\/secret","code":1e400}}`,
+		} {
+			t.Run(fmt.Sprintf("%d/%s", status, name), func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(status)
+					_, _ = w.Write([]byte(body))
+				}))
+				defer srv.Close()
+				client, err := New(config.EndpointSpec{Endpoint: srv.URL, Model: "m", Transport: "openai", APIKey: "sk-dummy/secret"}, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				obs, err := client.Send(context.Background(), fingerprint.Probe{ID: "p", Text: "hello"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(obs.Error, "[redacted]") || strings.Contains(obs.Error, "sk-dummy") || strings.Contains(obs.Error, `\u0073k-dummy`) {
+					t.Fatalf("escaped key survived error redaction: %s", obs.Error)
+				}
+			})
+		}
+	}
+}
+
 func TestErrorKeyRedactedBeforeTruncation(t *testing.T) {
 	const key = "super-secret-key-123"
 	for _, status := range []int{http.StatusUnauthorized, http.StatusOK} {
@@ -419,6 +470,26 @@ func TestErrorKeyRedactedBeforeTruncation(t *testing.T) {
 				t.Fatalf("key was truncated before redaction: %q", obs.Error)
 			}
 		})
+	}
+}
+
+func TestOversizedErrorDoesNotLeakEscapedKey(t *testing.T) {
+	body := `{"error":{"message":"invalid key sk-dummy\/secret","padding":"` + strings.Repeat("x", maxResponseBytes) + `"}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	client, err := New(config.EndpointSpec{Endpoint: srv.URL, Model: "m", Transport: "openai", APIKey: "sk-dummy/secret"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs, err := client.Send(context.Background(), fingerprint.Probe{ID: "p", Text: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(obs.Error, "sk-dummy") || !strings.Contains(obs.Error, "response exceeded size limit") {
+		t.Fatalf("oversized error was not safely suppressed: %s", obs.Error)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"runtime"
 	"strings"
 
 	"github.com/tyk-swe/xlfp/pkg/config"
@@ -83,8 +84,8 @@ func runWizard(stdin io.Reader, stdout, stderr io.Writer) int {
 		official = withScheme(official)
 	}
 
-	// Key check: resolve exactly as the real command will, so a missing
-	// key is explained before anything is sent.
+	// Validate both endpoints exactly as the commands will before printing
+	// suggestions or sending anything. Client construction performs no I/O.
 	cfg, err := config.Load("")
 	if err != nil {
 		return fail(stderr, err)
@@ -93,9 +94,18 @@ func runWizard(stdin io.Reader, stdout, stderr io.Writer) int {
 	if mode == "audit" {
 		purpose = "target"
 	}
-	spec, err := cfg.Resolve(config.Overrides{Endpoint: endpoint, Model: model, Purpose: purpose})
+	client, spec, err := resolveClient(cfg, endpointFlags{endpoint: endpoint, model: model}, purpose, 0)
 	if err != nil {
 		return failWithHint(stderr, err)
+	}
+	var officialURL string
+	var oSpec config.EndpointSpec
+	if mode == "audit" && official != "" {
+		oClient, resolved, err := resolveClient(cfg, endpointFlags{endpoint: official, model: model}, "official", 0)
+		if err != nil {
+			return failWithHint(stderr, fmt.Errorf("official: %w", err))
+		}
+		oSpec, officialURL = resolved, oClient.URL
 	}
 	if spec.APIKey == "" && !isLoopback(endpoint) {
 		fmt.Fprintln(stdout, "\nOne more thing: xlfp needs your API key for that endpoint, but you should")
@@ -105,13 +115,12 @@ func runWizard(stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "provider's official address, so they can't leak to unknown endpoints.)")
 		ans, ok := ask("If this endpoint needs no key at all, continue anyway? [y/N]: ")
 		if !ok || !isYes(ans, false) {
-			fmt.Fprintf(stdout, "\nWhen you're ready, this command does the same thing:\n  %s\n", equivalentCommand(mode, endpoint, model, claim, official))
+			fmt.Fprintf(stdout, "\nWhen you're ready, this command does the same thing:\n  %s\n", equivalentCommand(mode, client.URL, model, claim, officialURL))
 			return abort()
 		}
 	}
 	if mode == "audit" && official != "" {
-		oSpec, oErr := cfg.Resolve(config.Overrides{Endpoint: official, Model: model, Purpose: "official"})
-		if oErr == nil && oSpec.APIKey == "" && !isLoopback(official) {
+		if oSpec.APIKey == "" && !isLoopback(official) {
 			fmt.Fprintln(stdout, "\nNote: no key found for the official endpoint either. Set XLFP_OFFICIAL_API_KEY,")
 			fmt.Fprintln(stdout, "or the provider's own variable (e.g. DEEPSEEK_API_KEY via --official-api-key-env")
 			fmt.Fprintln(stdout, "in the flag form), if it needs one. Continuing anyway; the official side may fail.")
@@ -175,14 +184,22 @@ func isYes(ans string, defaultYes bool) bool {
 
 func equivalentCommand(mode, endpoint, model, claim, official string) string {
 	if mode == "uncover" {
-		return fmt.Sprintf("xlfp uncover --endpoint %s --model %s", endpoint, model)
+		return fmt.Sprintf("xlfp uncover --endpoint %s --model %s", shellQuote(endpoint), shellQuote(model))
 	}
-	cmd := fmt.Sprintf("xlfp audit --target-url %s --model %s", endpoint, model)
+	cmd := fmt.Sprintf("xlfp audit --target-url %s --model %s", shellQuote(endpoint), shellQuote(model))
 	if claim != "" {
-		cmd += " --claim " + claim
+		cmd += " --claim " + shellQuote(claim)
 	}
 	if official != "" {
-		cmd += " --official-url " + official
+		cmd += " --official-url " + shellQuote(official)
 	}
 	return cmd
+}
+
+// shellQuote uses PowerShell syntax on Windows and POSIX syntax elsewhere.
+func shellQuote(s string) string {
+	if runtime.GOOS == "windows" {
+		return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+	}
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
