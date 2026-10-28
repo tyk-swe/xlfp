@@ -86,6 +86,8 @@ type Result struct {
 	Observations  []Observation `json:"observations"`
 	RequestsSpent int           `json:"requests_spent"`
 	DBVersion     string        `json:"db_version"`
+	// ProbeError records an operational failure when partial evidence is retained.
+	ProbeError string `json:"probe_error,omitempty"`
 }
 
 // entryScore is the intermediate per-entry fit.

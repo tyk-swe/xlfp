@@ -602,6 +602,7 @@ func FingerprintWithBackend(ctx context.Context, c Backend, db *fingerprint.DB, 
 		}
 		res := db.Rank(obs, opts.MinConfidence)
 		res.RequestsSpent = spent()
+		res.ProbeError = failure
 		note := "probing stopped early: " + failure
 		if res.Reason == "" {
 			res.Reason = note
