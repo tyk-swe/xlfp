@@ -27,6 +27,8 @@ surface. Package layout:
   tie/inconclusive rules, stable reason codes.
 - `pkg/probe` — the three transports and the staged, capped probe
   runner (with an `OnProbe` progress callback).
+- `pkg/opencode` — isolated OpenCode CLI sessions, effective-configuration
+  checks, and structured usage parsing for stealth model testing.
 - `pkg/compare` — audit verdicts and overhead-normalized divergence.
 - `pkg/config` — flag/env/config resolution (environment wins for
   keys).

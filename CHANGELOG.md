@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.6
+
+- Add an interactive terminal dashboard for checks, progress, cancellation,
+  and session history, with the line-by-line wizard retained as a fallback.
+- Add `xlfp opencode` and guided OpenCode stealth testing through the
+  installed OpenCode v1 client, using fresh sessions and structured usage.
+- Report OpenCode probe runs separately from HTTP request counts, and
+  block direct HTTP probing of OpenCode-hosted endpoints.
+- Verify resolved OpenCode configuration before probing, rejecting managed
+  or organization overrides that change the isolated probe settings.
+
 ## 0.1.5
 
 This release strengthens the evidence and credential handling behind

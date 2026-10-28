@@ -128,6 +128,10 @@ func BuildURL(spec config.EndpointSpec) (string, error) {
 	if u.User != nil {
 		return "", fmt.Errorf("invalid endpoint %s: userinfo is not supported; pass keys via environment or config", sanitizedEndpoint(raw))
 	}
+	host := strings.TrimRight(strings.ToLower(u.Hostname()), ".")
+	if host == "opencode.ai" || strings.HasSuffix(host, ".opencode.ai") {
+		return "", fmt.Errorf("OpenCode-hosted endpoints require the OpenCode client for free-tier models; use xlfp opencode --model opencode/<model-id> (direct HTTP probing is disabled for all OpenCode models)")
+	}
 	// The environment proxy bypass recognizes the exact lowercase spelling.
 	// Canonicalize this loopback alias so mixed case cannot proxy a local key.
 	if strings.EqualFold(u.Hostname(), "localhost") {
@@ -538,13 +542,36 @@ type Options struct {
 // failure before enough counts for a ranking is an operational error, with
 // any collected observations returned in the result alongside the error.
 func Fingerprint(ctx context.Context, c *Client, db *fingerprint.DB, opts Options) (fingerprint.Result, error) {
+	return FingerprintWithBackend(ctx, httpBackend{c}, db, opts)
+}
+
+// Backend supplies observations and counts attempts in its own unit. An HTTP
+// attempt is a request; an OpenCode attempt is a CLI probe run, which may make
+// several provider requests internally. Implementations must honor the remaining
+// budget and context, and must return errors safe for inclusion in reports.
+type Backend interface {
+	SendProbe(context.Context, fingerprint.Probe, int) (fingerprint.Observation, error)
+	Attempts() int
+}
+
+type httpBackend struct{ *Client }
+
+func (b httpBackend) Attempts() int { return b.Requests() }
+func (b httpBackend) SendProbe(ctx context.Context, p fingerprint.Probe, remaining int) (fingerprint.Observation, error) {
+	return b.send(ctx, p, remaining)
+}
+
+// FingerprintWithBackend runs the same adaptive ranking for a non-HTTP backend.
+// Options.MaxRequests, OnProbe and Result.RequestsSpent use backend attempt units;
+// callers must label these units correctly when presenting results.
+func FingerprintWithBackend(ctx context.Context, c Backend, db *fingerprint.DB, opts Options) (fingerprint.Result, error) {
 	maxReq := opts.MaxRequests
 	if maxReq <= 0 {
 		maxReq = len(db.Probes)
 	}
 	var obs []fingerprint.Observation
-	startReq := c.Requests()
-	spent := func() int { return c.Requests() - startReq }
+	startReq := c.Attempts()
+	spent := func() int { return c.Attempts() - startReq }
 	stages := []int{}
 	seenStage := map[int]bool{}
 	ordinary := map[string]bool{}
@@ -592,7 +619,7 @@ func Fingerprint(ctx context.Context, c *Client, db *fingerprint.DB, opts Option
 			if spent() >= maxReq {
 				break
 			}
-			o, err := c.send(ctx, p, maxReq-spent())
+			o, err := c.SendProbe(ctx, p, maxReq-spent())
 			if opts.OnProbe != nil {
 				opts.OnProbe(spent())
 			}

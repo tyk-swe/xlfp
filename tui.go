@@ -24,6 +24,8 @@ import (
 
 const interactiveHelp = "Usage: xlfp %s\n\nRun xlfp's %s in an interactive terminal.\n"
 
+var tuiMenuLabels = []string{"Uncover a model family", "Audit a provider claim", "OpenCode stealth test", "Browse families", "How xlfp works", "Session results", "Quit"}
+
 // tuiAvailable is a variable so routing can be tested without a real terminal.
 var tuiAvailable = func(in io.Reader, out io.Writer) bool {
 	i, iok := in.(*os.File)
@@ -135,7 +137,10 @@ func (m *tuiModel) addField(name, label, value string, endpoint bool) {
 func (m *tuiModel) newForm(mode string) {
 	m.mode, m.screen, m.focus, m.message = mode, "form", 0, ""
 	m.fields = nil
-	if mode == "uncover" {
+	if mode == "opencode" {
+		m.addField("target_model", "OpenCode model (opencode/<model-id>)", "", false)
+		m.addField("opencode_bin", "OpenCode executable", "opencode", false)
+	} else if mode == "uncover" {
 		m.addField("target_url", "Endpoint URL (blank inherits config/environment)", "", true)
 		m.addField("target_model", "Model", "", false)
 		m.addField("target_transport", "Transport (auto, openai, anthropic, gemini)", "", false)
@@ -158,9 +163,14 @@ func (m *tuiModel) newForm(mode string) {
 		m.addField("both_key", "API key environment variable name for both", "", false)
 		m.addField("claim", "Claimed family (blank infers from target model)", "", false)
 	}
-	m.addField("config", "Config file path", "", false)
-	m.addField("max", "Maximum requests per endpoint", "12", false)
-	m.addField("timeout", "Per-request timeout (for example 30s)", "30s", false)
+	if mode == "opencode" {
+		m.addField("max", "Maximum probe runs (OpenCode controls internal retries)", "12", false)
+		m.addField("timeout", "Per-probe timeout (for example 60s)", "60s", false)
+	} else {
+		m.addField("config", "Config file path", "", false)
+		m.addField("max", "Maximum requests per endpoint", "12", false)
+		m.addField("timeout", "Per-request timeout (for example 30s)", "30s", false)
+	}
 	m.addField("confidence", "Minimum confidence (0 uses the default)", "0", false)
 	m.fields[0].input.Focus()
 }
@@ -181,7 +191,7 @@ func (m *tuiModel) prepare() {
 	m.message = ""
 	max, err := strconv.Atoi(m.value("max"))
 	if err != nil {
-		m.message = "Maximum requests must be a whole number."
+		m.message = "The probe limit must be a whole number."
 		return
 	}
 	timeout, err := time.ParseDuration(m.value("timeout"))
@@ -195,6 +205,16 @@ func (m *tuiModel) prepare() {
 		return
 	}
 	common := commonFlags{configPath: m.value("config"), maxRequests: max, timeout: timeout, minConfidence: confidence}
+	if m.mode == "opencode" {
+		p, err := prepareOpenCode(m.value("opencode_bin"), m.value("target_model"), common)
+		if err != nil {
+			m.message = cleanUI(err.Error())
+			return
+		}
+		m.prepared = p
+		m.showReview()
+		return
+	}
 	target := endpointFlags{endpoint: withScheme(m.value("target_url")), model: m.value("target_model"), transport: m.value("target_transport"), profile: m.value("target_profile"), apiKeyEnv: m.value("target_key")}
 	official := endpointFlags{endpoint: withScheme(m.value("official_url")), model: m.value("official_model"), transport: m.value("official_transport"), profile: m.value("official_profile"), apiKeyEnv: m.value("official_key")}
 	enabled := false
@@ -348,9 +368,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "home":
 			switch key {
 			case "up", "k":
-				m.menu = (m.menu + 5) % 6
+				m.menu = (m.menu + len(tuiMenuLabels) - 1) % len(tuiMenuLabels)
 			case "down", "j":
-				m.menu = (m.menu + 1) % 6
+				m.menu = (m.menu + 1) % len(tuiMenuLabels)
 			case "q", "esc":
 				return m, tea.Quit
 			case "enter":
@@ -360,13 +380,15 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case 1:
 					m.newForm("audit")
 				case 2:
+					m.newForm("opencode")
+				case 3:
 					m.viewMode = 0
 					m.showFamilies()
-				case 3:
-					m.showText("explain", explainText)
 				case 4:
-					m.screen, m.historyIndex = "history", maxInt(0, len(m.history)-1)
+					m.showText("explain", explainText)
 				case 5:
+					m.screen, m.historyIndex = "history", maxInt(0, len(m.history)-1)
+				case 6:
 					return m, tea.Quit
 				}
 			}
@@ -471,6 +493,15 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *tuiModel) showReview() {
 	p := m.prepared
 	var b strings.Builder
+	if p.mode == "opencode" {
+		fmt.Fprintf(&b, "OpenCode stealth test\nModel: %s\nUses the installed OpenCode CLI and your existing OpenCode login.\n", p.targetSpec.Model)
+		fmt.Fprintf(&b, "\nUp to %d probe runs; timeout %s per probe.\n", p.common.maxRequests, p.common.timeout)
+		fmt.Fprintln(&b, "OpenCode controls internal provider requests and retries; this is not a request cap.")
+		fmt.Fprintln(&b, "Fresh sessions use private configuration with tools disabled.")
+		fmt.Fprintln(&b, "Only continue if you are authorized to test this model; usage may be billable.")
+		m.showText("review", b.String())
+		return
+	}
 	if !p.targetHasKey && !isLoopback(p.targetSpec.Endpoint) {
 		fmt.Fprintln(&b, "WARNING: target has no API key; continuing sends unauthenticated requests.")
 	}
@@ -581,8 +612,25 @@ func makeTUIRecord(p *preparedCheck, r checkResult) tuiRecord {
 		state = "failed"
 	}
 	title := fmt.Sprintf("%s — %s — %s", strings.ToUpper(p.mode), report.SanitizeURL(p.targetSpec.Endpoint), state)
+	if p.mode == "opencode" {
+		title = fmt.Sprintf("OPENCODE — %s — %s", p.targetSpec.Model, state)
+	}
 	var plain, verbose, jsonText string
-	if r.cancelled {
+	if r.cancelled && p.mode == "opencode" {
+		partial := map[string]any{"state": "cancelled", "model": p.targetSpec.Model,
+			"opencode_version": p.opencode.Version(), "probes_spent": r.targetSpent}
+		if r.uncover != nil {
+			partial["target_evidence"] = evidenceFor(*r.uncover)
+		}
+		if r.err != nil {
+			partial["error"] = r.err.Error()
+		}
+		var b bytes.Buffer
+		_ = writeJSON(&b, partial)
+		jsonText = b.String()
+		plain = fmt.Sprintf("CANCELLED — this check did not finish.\nProbe runs: %d\n\nAvailable partial evidence (not a completed verdict):\n%s", r.targetSpent, jsonText)
+		verbose = plain
+	} else if r.cancelled {
 		var target, official *fingerprint.Result
 		if r.uncover != nil {
 			target = r.uncover
@@ -699,12 +747,14 @@ func (m *tuiModel) View() string {
 	switch m.screen {
 	case "home":
 		fmt.Fprintln(&b, "Choose a task:")
-		for i, label := range []string{"Uncover a model family", "Audit a provider claim", "Browse families", "How xlfp works", "Session results", "Quit"} {
+		visible := minInt(len(tuiMenuLabels), m.height-6)
+		start := maxInt(0, m.menu-visible+1)
+		for i := start; i < minInt(start+visible, len(tuiMenuLabels)); i++ {
 			marker := "  "
 			if i == m.menu {
 				marker = "> "
 			}
-			fmt.Fprintln(&b, marker+label)
+			fmt.Fprintln(&b, marker+tuiMenuLabels[i])
 		}
 		fmt.Fprintln(&b, "\n↑/↓ choose  •  Enter open  •  q quit")
 	case "form":
@@ -740,13 +790,21 @@ func (m *tuiModel) View() string {
 			fmt.Fprintf(&b, "%s%s\n  %s\n", marker, ansi.Truncate(m.fields[i].label, m.width-2, "…"), ansi.Truncate(fieldValue(m.fields[i], i == m.focus, m.width), m.width-2, "…"))
 		}
 		fmt.Fprintln(&b, "Tab/↑/↓ fields • Ctrl+S review • Esc")
-		fmt.Fprintln(&b, "Use environment/config for API keys.")
+		if m.mode == "opencode" {
+			fmt.Fprintln(&b, "Uses your existing OpenCode login.")
+		} else {
+			fmt.Fprintln(&b, "Use environment/config for API keys.")
+		}
 	case "review":
 		fmt.Fprintf(&b, "Review %s\n", m.prepared.mode)
 		fmt.Fprintln(&b, m.viewport.View())
 		fmt.Fprintln(&b, "↑/↓ scroll • Enter confirm • Esc edit")
 	case "running":
-		fmt.Fprintf(&b, "Running %s…\n\nTarget requests: %d / %d\n", m.mode, m.targetSpent, m.prepared.common.maxRequests)
+		unit := "Target requests"
+		if m.mode == "opencode" {
+			unit = "Probe runs"
+		}
+		fmt.Fprintf(&b, "Running %s…\n\n%s: %d / %d\n", m.mode, unit, m.targetSpent, m.prepared.common.maxRequests)
 		if m.prepared.official != nil {
 			fmt.Fprintf(&b, "Official requests: %d / %d\n", m.officialSpent, m.prepared.common.maxRequests)
 		}

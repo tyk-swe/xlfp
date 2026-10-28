@@ -12,11 +12,13 @@ check a provider's claimed family, or add a diagnostic to an agent workflow.
   `audit` compares the evidence with a claim, optionally using an official baseline.
 - **Built for real endpoints:** OpenAI-compatible, Anthropic, and Gemini
   API shapes; a configurable request cap; human-readable and JSON output.
+- **OpenCode stealth testing:** `opencode` runs probes through the installed
+  OpenCode client, using its login and structured token usage.
 - **Evidence with limits:** verified candidates include DeepSeek, Qwen,
   OpenAI, Mistral, GLM, and MiMo. Ambiguous or unreliable evidence can
   produce `INCONCLUSIVE` rather than a guess.
 
-[Get started](#your-first-check-2-minutes) · [Check a claim](#check-a-providers-claim-audit) · [How it works](./docs/how-it-works.md) · [What's new in 0.1.5](./CHANGELOG.md)
+[Get started](#your-first-check-2-minutes) · [Check a claim](#check-a-providers-claim-audit) · [How it works](./docs/how-it-works.md) · [What's new in 0.1.6](./CHANGELOG.md)
 
 What it can tell you:
 
@@ -48,7 +50,7 @@ irm https://raw.githubusercontent.com/tyk-swe/xlfp/main/install.ps1 | iex
 This downloads the right binary for your machine from the latest
 GitHub Release, verifies its SHA-256 checksum, and installs it to
 `~/.local/bin` (Windows: `%LOCALAPPDATA%\xlfp`). Set `XLFP_VERSION`
-to pin a release (e.g. `v0.1.5`) or `XLFP_INSTALL_DIR` to change the
+to pin a release (e.g. `v0.1.6`) or `XLFP_INSTALL_DIR` to change the
 destination.
 
 With Go 1.23+ you can also install or build from source:
@@ -118,6 +120,48 @@ If the evidence isn't trustworthy enough, you get `INCONCLUSIVE` plus
 a plain-English reason and concrete things to try. Add `--verbose`
 for the technical evidence, or `--json` for scripts and agents.
 
+### Test an OpenCode stealth model
+
+OpenCode free-tier chat models require the OpenCode client. Install
+[OpenCode](https://opencode.ai/docs), then authenticate and choose a model:
+
+```bash
+opencode auth login
+opencode models opencode
+xlfp opencode --model opencode/big-pickle --json
+```
+
+Model availability changes; replace `big-pickle` with a current model ID.
+You can also choose **OpenCode stealth test** in the dashboard or option 3
+in `xlfp wizard`. Both review the model and probe limit before running.
+
+This command requires OpenCode v1 JSON events (reference version v1.19.4).
+It launches a fresh OpenCode session per probe, passes the exact test string
+through stdin, and uses private configuration with tools, plugins, and
+project instructions disabled. It uses your existing OpenCode login;
+`XLFP_API_KEY`, xlfp endpoint profiles, and HTTP transport flags do not apply.
+Use `--opencode-bin PATH` if OpenCode is not on PATH.
+
+The runner verifies `opencode debug config` before probing and before each
+subsequent probe. It refuses to proceed if managed or organization settings
+change the isolated probe configuration, or if inspection fails. Resolved
+configuration values are never printed.
+
+`--max-probes` defaults to 12 and `--timeout` to 60 seconds per probe.
+OpenCode controls internal provider calls and retries, so the probe cap
+cannot guarantee a provider-request cap. `--min-confidence`, `--verbose`,
+and the family-level evidence limits apply as usual. There is no OpenCode
+audit/baseline mode in this version.
+
+JSON includes `command: "opencode"`, `model`, `opencode_version`, and
+`probes_spent`, alongside the usual status, rankings, and observations.
+It omits `requests_spent`, since provider-request counts are unknown.
+Missing, invalid, or multi-step usage is rejected as evidence.
+
+Direct HTTP commands reject `opencode.ai` and its subdomains for all models,
+including paid models. Use `xlfp opencode`; there is no HTTP fallback or
+client-header impersonation.
+
 ### Check a provider's claim (audit)
 
 ```bash
@@ -150,7 +194,7 @@ treat a failed baseline as corroboration. A fix is pending in
 
 | Code | Meaning |
 |---|---|
-| 0 | `uncover`: identified · `audit`: match |
+| 0 | `uncover` / `opencode`: identified · `audit`: match |
 | 1 | operational or usage error |
 | 2 | inconclusive |
 | 3 | `audit`: mismatch |
@@ -161,7 +205,7 @@ A normal dashboard exit returns 0; the table applies to direct checks.
 
 This repo ships an agent skill ([skills/xlfp/SKILL.md](./skills/xlfp/SKILL.md))
 that teaches coding agents to run `xlfp` correctly: when to use
-`uncover` vs `audit`, always `--json`, exit-code meanings, key safety
+`uncover`, `opencode`, and `audit`, always `--json`, exit-code meanings, key safety
 (never paste keys into chat), and the honesty rules above.
 
 From a clone, install it into your agent's skill directory:
@@ -191,8 +235,9 @@ When run outside a checkout, downloaded Muse skill sources are kept in
 ## Responsible use
 
 Only probe endpoints you own or are authorized to test. Every run
-sends real, potentially billable API requests (capped by
-`--max-requests`) including literal special-token strings, which
+sends real, potentially billable API requests (HTTP commands cap these
+with `--max-requests`; OpenCode caps CLI runs with `--max-probes` and
+controls its own internal requests), including literal special-token strings, which
 some providers may log or prohibit. A `MISMATCH` verdict is
 diagnostic tokenizer evidence about the model family — it is not, on
 its own, proof of fraud, quantization, or quality degradation.

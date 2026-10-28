@@ -108,6 +108,10 @@ func writeTries(w io.Writer, tries ...string) {
 // inconclusive fingerprint. Unknown codes fall back to the technical
 // reason so nothing is hidden.
 func explainInconclusive(w io.Writer, r fingerprint.Result) {
+	explainInconclusiveFor(w, r, false)
+}
+
+func explainInconclusiveFor(w io.Writer, r fingerprint.Result, opencode bool) {
 	topLabel, unverifiedLabel := "", ""
 	if len(r.Rankings) > 0 {
 		topLabel = familyLabel(r.Rankings[0].Family, r.Rankings[0].Display)
@@ -119,6 +123,11 @@ func explainInconclusive(w io.Writer, r fingerprint.Result) {
 	var tries []string
 	switch r.ReasonCode {
 	case fingerprint.ReasonInsufficientCounts:
+		if opencode {
+			fmt.Fprintln(w, "Why: OpenCode did not return usable prompt-token counts for enough test messages.")
+			writeTries(w, "Check your OpenCode login and selected model with `opencode models opencode`.", "Use --verbose to inspect partial evidence; check OpenCode v1 JSON support.")
+			return
+		}
 		why = "The endpoint did not give back usable token counts for enough of the test messages. Without those counts there is nothing to compare."
 		tries = []string{
 			"Make sure the address really is an LLM chat API and the model name is correct.",
@@ -177,6 +186,9 @@ func explainInconclusive(w io.Writer, r fingerprint.Result) {
 		tries = []string{
 			"Run it again to rule out a flaky response.",
 			"If you are checking a provider's claim, `xlfp audit` with the official endpoint gives a stronger comparison.",
+		}
+		if opencode {
+			tries = []string{"Run it again to rule out a flaky response; the model may be outside the known families."}
 		}
 	case fingerprint.ReasonNoVerifiedFamilies:
 		why = "This build's fingerprint database has no verified families to compare against. That should not happen in a released build."
@@ -239,6 +251,18 @@ func Uncover(w io.Writer, endpointLabel, model, transport string, r fingerprint.
 	if r.RequestsSpent > 0 {
 		fmt.Fprintf(w, "Sent %d tiny test requests and compared how the endpoint counts tokens.\n", r.RequestsSpent)
 	}
+	writeFingerprint(w, r, verbose, false)
+}
+
+// OpenCode renders the shared evidence with CLI-run accounting, since provider
+// requests and internal retries are controlled by OpenCode and are not known.
+func OpenCode(w io.Writer, model, version string, r fingerprint.Result, verbose bool) {
+	fmt.Fprintf(w, "OpenCode: %s  Model: %s\n", version, model)
+	fmt.Fprintf(w, "Probe runs: %d. OpenCode controls internal provider requests and retries.\n", r.RequestsSpent)
+	writeFingerprint(w, r, verbose, true)
+}
+
+func writeFingerprint(w io.Writer, r fingerprint.Result, verbose, opencode bool) {
 	fmt.Fprintln(w)
 	identified := r.Status == fingerprint.StatusIdentified && len(r.Rankings) > 0
 	if identified {
@@ -257,7 +281,7 @@ func Uncover(w io.Writer, endpointLabel, model, transport string, r fingerprint.
 		}
 	} else {
 		fmt.Fprintln(w, "Result: INCONCLUSIVE — xlfp cannot tell which family this endpoint is.")
-		explainInconclusive(w, r)
+		explainInconclusiveFor(w, r, opencode)
 		writeClosest(w, "\nClosest matches (not conclusive):", r)
 	}
 	if !verbose {

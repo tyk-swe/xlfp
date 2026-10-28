@@ -38,6 +38,28 @@ exact checkpoint.
    source-verified one forces inconclusive rather than a false
    verdict.
 
+## OpenCode observations
+
+`xlfp opencode` uses the same corpus, adaptive stages, database, and ranking
+through the installed OpenCode CLI. Every probe starts a fresh session in
+one private workspace, with a fixed title and agent prompt and tools disabled.
+This keeps session context from growing across probes. The constant context
+overhead is fitted by the existing ranking.
+
+Resolved configuration is checked with `opencode debug config` at startup
+and before every probe. Overrides and added context or integrations are
+rejected before submitting a prompt, including settings loaded after the
+inline configuration from managed installations or organizations.
+
+One completed `step_finish` supplies the count: `tokens.input` plus
+`tokens.cache.read` and `tokens.cache.write`. Output and reasoning tokens
+are excluded. Tool calls, multiple distinct steps or sessions, failed runs,
+and unusable usage are rejected. Model text is never used as evidence.
+
+`--max-probes` (default 12) limits CLI probe runs. OpenCode may retry provider
+requests internally, so actual provider-call counts are unknown. Reports
+use `probes_spent`; HTTP reports continue to use `requests_spent`.
+
 ## Verified vs unverified families
 
 "Source-verified" means the counts are reproduced from the family's

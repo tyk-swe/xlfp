@@ -2,7 +2,7 @@
 name: xlfp
 description: Identify the true model family behind an unknown or "stealth" LLM endpoint, and audit third-party providers for silent model substitution, using the xlfp CLI (tokenizer fingerprinting from reported token usage). Use when the user asks what model an endpoint really is, whether a provider swapped or substituted models, or wants to verify a claimed model family.
 license: GPL-3.0-only
-compatibility: Requires the xlfp binary on PATH (install commands in the body), network access to the endpoint being checked, and an API key provided through environment variables.
+compatibility: Requires xlfp on PATH and network access. HTTP checks use API keys from environment variables; OpenCode checks also require the installed OpenCode v1 client and its existing login.
 ---
 
 # xlfp — LLM endpoint fingerprinting
@@ -10,9 +10,10 @@ compatibility: Requires the xlfp binary on PATH (install commands in the body), 
 `xlfp` sends up to 12 tiny probe requests to an LLM endpoint and
 matches the reported prompt-token counts against known tokenizer
 families (OpenAI, Qwen, DeepSeek, Mistral, GLM, MiMo verified;
-Google/Claude scored as unverified hints). It answers two questions:
+Google/Claude scored as unverified hints). It provides these checks:
 
 - `xlfp uncover` — which family is this endpoint, really?
+- `xlfp opencode` — which family is this OpenCode stealth model, through OpenCode?
 - `xlfp audit` — does this endpoint match the family the provider claims?
 
 Hard limits you must respect when reporting: results are
@@ -42,10 +43,15 @@ say so — never invent fingerprint results.
    tiny, normally billable requests per endpoint, visible to the
    provider. Tell the user before the first run; don't raise the cap
    silently.
+   OpenCode checks instead use `--max-probes` (default 12) to limit CLI
+   runs. OpenCode controls internal calls and retries, so provider-request
+   counts cannot be capped or reported by xlfp.
 3. **Keys.** Never ask the user to paste an API key into the chat,
    and never put a key in a command (xlfp has no such flag). Ask the
    user to export it in the shell environment you run in, then check
    presence without printing it: `test -n "$XLFP_API_KEY" && echo set`.
+   OpenCode checks use the existing OpenCode login (`opencode auth login`)
+   instead of xlfp keys or endpoint profiles.
    - Unknown/third-party endpoints: `XLFP_API_KEY`, or name any
      variable with `--api-key-env NAME`.
    - Audit sides: `XLFP_TARGET_API_KEY`, `XLFP_OFFICIAL_API_KEY`,
@@ -60,6 +66,9 @@ say so — never invent fingerprint results.
 # Unknown / stealth endpoint:
 xlfp uncover --endpoint https://provider.example --model stealth-model-x --json
 
+# OpenCode stealth model (requires the real installed OpenCode client):
+xlfp opencode --model opencode/big-pickle --max-probes 12 --json
+
 # Provider claims a family:
 xlfp audit --target-url https://provider.example --model deepseek-chat --claim deepseek --json
 
@@ -73,6 +82,15 @@ Native Anthropic/Gemini APIs behind non-official hosts need
 `--transport anthropic|gemini`. Provenance of the database:
 `xlfp families --json`.
 
+OpenCode free-tier endpoints require OpenCode. Never use `uncover` or
+`audit` against `opencode.ai` or its subdomains, or impersonate OpenCode
+headers. xlfp blocks these hosts for paid models too. Use `xlfp opencode`
+with an available selector from `opencode models opencode`; model names
+rotate. It supports family identification only, not audits/baselines.
+The v1 JSON event contract is required (reference v1.19.4); if unsupported,
+report the setup issue without falling back to HTTP. `--opencode-bin PATH`
+selects the executable, and `--timeout` defaults to 60s per probe.
+
 ## 3. Interpret
 
 Exit codes: `0` identified/match, `1` operational or usage error,
@@ -82,6 +100,10 @@ Exit codes: `0` identified/match, `1` operational or usage error,
 `top_family`, `rankings[]` (verified families with `confidence`),
 `unverified_rankings[]` (hints only), `reason` (technical prose),
 `reason_code` (stable cause), `requests_spent`, `observations[]`.
+
+`opencode` JSON has the same evidence fields, plus `model`,
+`opencode_version`, and `probes_spent`. It omits `requests_spent` because
+provider-call counts are unknown. Exit codes match `uncover`.
 
 `audit` JSON: `verdict` (`match`|`mismatch`|`inconclusive`),
 `claimed_family`, `reason_code`, nested `target`/`official`

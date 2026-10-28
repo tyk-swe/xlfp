@@ -23,6 +23,40 @@ rejected. Qwen, DeepSeek, GLM, Mistral, MiMo and OpenAI endpoints are
 normally reached through the `openai` transport. Azure OpenAI hosts
 receive the `api-key` header instead of `Authorization`.
 
+## OpenCode client
+
+OpenCode is a separate command, not an HTTP transport:
+
+```bash
+opencode auth login
+opencode models opencode
+xlfp opencode --model opencode/big-pickle --max-probes 12 --timeout 60s --json
+```
+
+Use an available `opencode/<model-id>` selector and, optionally,
+`--opencode-bin PATH`. The runner uses OpenCode's existing authentication
+and data location, with isolated temporary configuration and a fixed,
+tool-free agent. User configuration and project instructions are excluded;
+custom provider settings from the user's OpenCode config are not inherited.
+Before initialization completes and before every probe, xlfp checks
+`opencode debug config`. Managed or organization settings that change the
+probe agent, permissions, or other settings, or add instructions, plugins,
+providers, or MCP servers, cause it to refuse the probe. An unavailable,
+invalid, oversized, or timed-out configuration inspection also fails closed.
+Inspection output is never printed and inspection does not consume probe runs.
+xlfp profiles, `XLFP_*` endpoint/key variables, `--transport`, and
+`--max-requests` do not configure this command.
+
+The v1 JSON event contract is required (reference v1.19.4). There is no
+automatic install, upgrade, or direct-HTTP fallback. `--max-probes` counts
+CLI runs, not provider calls; OpenCode controls retries internally.
+`--timeout` applies to each run, `--min-confidence` uses the usual ranking
+threshold, and `--verbose` / `--json` expose the same evidence. OpenCode
+JSON uses `probes_spent` and `opencode_version` instead of `requests_spent`.
+
+All direct HTTP commands reject `opencode.ai` and its subdomains, including
+paid models, to avoid accidentally using OpenCode-only free-tier endpoints.
+
 ## API keys
 
 Keys come from the **environment or a config file only** — there is

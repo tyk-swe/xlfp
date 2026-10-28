@@ -70,7 +70,7 @@ func TestTUIConfirmationProgressAndHistory(t *testing.T) {
 		t.Fatalf("failure not reported: %#v", m.current)
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	m.menu = 4
+	m.menu = 5
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if m.screen != "result" || !json.Valid([]byte(m.current.json)) {

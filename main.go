@@ -26,7 +26,7 @@ import (
 )
 
 // version is overridable at release time via -ldflags -X main.version=...
-var version = "0.1.5"
+var version = "0.1.6"
 
 // Exit codes:
 const (
@@ -45,6 +45,7 @@ Usage:
   xlfp tui                                  terminal dashboard
   xlfp wizard                               line-by-line guided mode
   xlfp uncover --endpoint URL --model NAME [flags]
+  xlfp opencode --model opencode/MODEL [flags]
   xlfp audit --target-url URL --model NAME [--claim FAMILY] [--official-url URL] [flags]
   xlfp families [--json]
   xlfp explain
@@ -55,6 +56,10 @@ answer or an honest "inconclusive". audit answers "is this provider
 really serving the family it claims?" with MATCH, MISMATCH, or
 INCONCLUSIVE. Both work by comparing how the endpoint counts tokens
 against known families; neither can prove an exact model version.
+
+For OpenCode stealth models, use xlfp opencode --model opencode/MODEL.
+It uses the installed OpenCode CLI and login; direct OpenCode URLs are
+blocked. --max-probes limits CLI runs, while OpenCode controls internal calls.
 
 API keys: xlfp never takes a key as a flag value. For unknown endpoints
 set XLFP_API_KEY in your environment first. Provider keys such as
@@ -161,11 +166,15 @@ func writerIsTTY(w io.Writer) bool {
 // progress counter on a terminal, plus a finish func that clears it.
 // Off-terminal (pipes, files, agent captures) it stays silent.
 func probeProgress(stderr io.Writer, enabled bool, label string) (func(int), func()) {
+	return progressCounter(stderr, enabled, label, "request(s) sent")
+}
+
+func progressCounter(stderr io.Writer, enabled bool, label, unit string) (func(int), func()) {
 	if !enabled || !writerIsTTY(stderr) {
 		return nil, func() {}
 	}
 	return func(n int) {
-			fmt.Fprintf(stderr, "\rProbing %s: %d request(s) sent...  ", label, n)
+			fmt.Fprintf(stderr, "\rProbing %s: %d %s...  ", label, n, unit)
 		}, func() {
 			fmt.Fprintf(stderr, "\r%s\r", strings.Repeat(" ", 48))
 		}
@@ -210,6 +219,8 @@ func run(args []string, stdout, stderr io.Writer) (code int) {
 		return interactiveCommand(args[0], args[1:], rawOut, stdout, stderr)
 	case "uncover":
 		return cmdUncover(args[1:], stdout, stderr)
+	case "opencode":
+		return cmdOpenCode(args[1:], stdout, stderr)
 	case "audit":
 		return cmdAudit(args[1:], stdout, stderr)
 	case "families":
@@ -502,6 +513,9 @@ func failSetup(stderr io.Writer, err error) int {
 func emitCheckResult(p *preparedCheck, r checkResult, stdout, stderr io.Writer) int {
 	if r.err != nil {
 		return fail(stderr, r.err)
+	}
+	if p.mode == "opencode" {
+		return emitOpenCodeResult(p, r, stdout, stderr)
 	}
 	cf := p.common
 	if p.mode == "uncover" {

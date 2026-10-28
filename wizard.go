@@ -37,7 +37,7 @@ func runWizard(stdin io.Reader, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, "Answer a few questions (Ctrl-C stops at any time; nothing is sent until you confirm).")
 	fmt.Fprintln(stdout)
 
-	choice, ok := ask("What do you want to do?\n  1) Find out which model family an endpoint really is\n  2) Check whether a provider really serves the family it claims\nChoose 1 or 2: ")
+	choice, ok := ask("What do you want to do?\n  1) Find out which model family an endpoint really is\n  2) Check whether a provider really serves the family it claims\n  3) Test an OpenCode stealth model through OpenCode\nChoose 1, 2 or 3: ")
 	if !ok {
 		return abort()
 	}
@@ -47,8 +47,10 @@ func runWizard(stdin io.Reader, stdout, stderr io.Writer) int {
 		mode = "uncover"
 	case "2", "audit", "check":
 		mode = "audit"
+	case "3", "opencode":
+		return runOpenCodeWizard(ask, abort, stdout, stderr)
 	default:
-		fmt.Fprintf(stdout, "Sorry, %q is not 1 or 2.\n", choice)
+		fmt.Fprintf(stdout, "Sorry, %q is not 1, 2 or 3.\n", choice)
 		return abort()
 	}
 

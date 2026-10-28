@@ -9,6 +9,7 @@ import (
 	"github.com/tyk-swe/xlfp/pkg/compare"
 	"github.com/tyk-swe/xlfp/pkg/config"
 	"github.com/tyk-swe/xlfp/pkg/fingerprint"
+	"github.com/tyk-swe/xlfp/pkg/opencode"
 	"github.com/tyk-swe/xlfp/pkg/probe"
 )
 
@@ -19,6 +20,7 @@ type preparedCheck struct {
 	common                       commonFlags
 	db                           *fingerprint.DB
 	target, official             *probe.Client
+	opencode                     *opencode.Client
 	targetSpec, officialSpec     config.EndpointSpec
 	targetHasKey, officialHasKey bool
 	claimed                      string
@@ -100,15 +102,38 @@ type checkResult struct {
 }
 
 // execute is called once per prepared check. The callback runs in the probe
-// goroutine, and counts actual requests including retries.
+// goroutine, and counts actual HTTP requests (including retries), or CLI
+// probe runs for OpenCode. Provider requests inside OpenCode are unknown.
 func (p *preparedCheck) execute(ctx context.Context, progress func(string, int)) (out checkResult) {
 	defer func() {
 		out.cancelled = ctx.Err() != nil
-		out.targetSpent = p.target.Requests()
+		if p.opencode != nil {
+			out.targetSpent = p.opencode.Attempts()
+		} else {
+			out.targetSpent = p.target.Requests()
+		}
 		if p.official != nil {
 			out.officialSpent = p.official.Requests()
 		}
 	}()
+	if p.opencode != nil {
+		defer func() {
+			if err := p.opencode.Close(); out.err == nil {
+				out.err = err
+			}
+		}()
+		if err := p.opencode.Init(ctx); err != nil {
+			out.err = err
+			return
+		}
+		opts := probe.Options{MaxRequests: p.common.maxRequests, MinConfidence: p.common.minConfidence}
+		if progress != nil {
+			opts.OnProbe = func(n int) { progress("target", n) }
+		}
+		r, err := probe.FingerprintWithBackend(ctx, p.opencode, p.db, opts)
+		out.uncover, out.err = &r, err
+		return
+	}
 	if p.mode == "audit" && !p.db.IsVerified(p.claimed) {
 		reason := fmt.Sprintf("claimed family %q is not a verified family in database v%s, so no verdict can be rendered for it", p.claimed, p.db.Version)
 		r := compare.Result{Verdict: compare.VerdictInconclusive, ClaimedFamily: p.claimed, Reason: reason, ReasonCode: compare.ReasonUnverifiedClaim,
