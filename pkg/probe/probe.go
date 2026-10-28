@@ -535,7 +535,8 @@ type Options struct {
 // usable usage. A probe failure (transport error or HTTP >= 300) stops
 // probing; when enough usable counts were already collected, the partial
 // evidence is still ranked and returned with the failure noted, while a
-// failure before enough counts for a ranking is an operational error.
+// failure before enough counts for a ranking is an operational error, with
+// any collected observations returned in the result alongside the error.
 func Fingerprint(ctx context.Context, c *Client, db *fingerprint.DB, opts Options) (fingerprint.Result, error) {
 	maxReq := opts.MaxRequests
 	if maxReq <= 0 {
@@ -568,7 +569,9 @@ func Fingerprint(ctx context.Context, c *Client, db *fingerprint.DB, opts Option
 	// evidence gathered so far can be ranked, else an error.
 	fail := func(failure string) (fingerprint.Result, error) {
 		if usable() < fingerprint.MinUsableProbes {
-			return fingerprint.Result{}, errors.New(failure)
+			res := db.Rank(obs, opts.MinConfidence)
+			res.RequestsSpent = spent()
+			return res, errors.New(failure)
 		}
 		res := db.Rank(obs, opts.MinConfidence)
 		res.RequestsSpent = spent()

@@ -82,7 +82,9 @@ them:
 Use a profile with `--profile provider-x` (uncover) or
 `--target-profile` / `--official-profile` (audit). Pass `--official-url ''`
 to disable an `XLFP_OFFICIAL_ENDPOINT` default; leaving the wizard's official
-endpoint blank does this automatically. A config file that
+endpoint blank does this automatically. The dashboard also skips the official
+baseline by default, even when `XLFP_OFFICIAL_ENDPOINT` is set; choose yes
+for the official baseline to use it. A config file that
 stores literal `api_key` values must not be group/world readable —
 on Linux and macOS `xlfp` refuses it until you run `chmod 600`
 (Windows has no such permission bits, so the check does not apply

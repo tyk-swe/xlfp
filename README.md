@@ -59,7 +59,7 @@ go install github.com/tyk-swe/xlfp@latest
 go build -o xlfp .
 ```
 
-There are no Go module dependencies. Check it works:
+Check it works:
 
 ```bash
 xlfp version
@@ -82,8 +82,19 @@ export XLFP_API_KEY='the key for that endpoint'
 like `OPENAI_API_KEY` are only ever sent to that provider's official
 address, so checking a stranger's endpoint can never leak them.
 
-**2. Run it.** In a terminal, just run `xlfp` and answer the
-questions. Or use the direct form:
+**2. Run it.** In a terminal, run `xlfp` (or `xlfp tui`) to open the
+dashboard. Choose Uncover or Audit, fill in the form, and review the
+request limit and endpoint before confirming. Use Tab or the arrow keys
+to move between fields, Ctrl+S to review, and Esc or Ctrl+C to cancel a
+running check. The dashboard also includes families, explanations, and
+results from the current session. Press `v` on a result to switch between
+plain, technical, and JSON views.
+
+The dashboard requires a terminal at least 40 columns by 10 rows. Run
+`xlfp wizard` for the line-by-line guide; it is also used automatically
+when the dashboard is unavailable on an interactive input. Results are
+kept in memory until you quit. For scripts or saved reports, use the
+direct commands and `--json` instead:
 
 ```bash
 xlfp uncover --endpoint https://provider.example --model stealth-model-x
@@ -143,6 +154,8 @@ treat a failed baseline as corroboration. A fix is pending in
 | 1 | operational or usage error |
 | 2 | inconclusive |
 | 3 | `audit`: mismatch |
+
+A normal dashboard exit returns 0; the table applies to direct checks.
 
 ## Use xlfp from your AI agent
 

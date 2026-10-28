@@ -13,8 +13,8 @@ import (
 	"github.com/tyk-swe/xlfp/pkg/fingerprint"
 )
 
-// runWizard is the guided first-run experience for bare `xlfp` on a
-// terminal. It only collects answers and then dispatches to the regular
+// runWizard is the line-by-line guided experience for `xlfp wizard` and
+// terminals that cannot run the dashboard. It only collects answers and then dispatches to the regular
 // uncover/audit commands, so every validation and security rule of the
 // flag path applies unchanged. The wizard never reads an API key: keys
 // stay in the environment, and when none resolves it explains the

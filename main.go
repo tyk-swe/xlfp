@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/term"
 	"github.com/tyk-swe/xlfp/pkg/compare"
 	"github.com/tyk-swe/xlfp/pkg/config"
 	"github.com/tyk-swe/xlfp/pkg/fingerprint"
@@ -36,10 +38,12 @@ const (
 
 const usage = `xlfp — find out which AI model family is really behind an endpoint
 
-New here? Just run ` + "`xlfp`" + ` in a terminal and answer the questions.
+New here? Just run ` + "`xlfp`" + ` in a terminal to open the dashboard.
 
 Usage:
-  xlfp                                      guided mode (in a terminal)
+  xlfp                                      terminal dashboard
+  xlfp tui                                  terminal dashboard
+  xlfp wizard                               line-by-line guided mode
   xlfp uncover --endpoint URL --model NAME [flags]
   xlfp audit --target-url URL --model NAME [--claim FAMILY] [--official-url URL] [flags]
   xlfp families [--json]
@@ -135,13 +139,12 @@ Costs and safety
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
-// stdinReader and stdinIsTTY gate the interactive wizard. They are
-// variables so tests can drive the wizard with scripted input. The
-// wizard only ever starts on a real terminal: piped/scripted/agent
-// invocations with no arguments keep the plain usage error.
+// stdinReader and stdinIsTTY gate interactive modes. Tests replace them
+// to drive the wizard without a real terminal. Non-interactive invocations
+// with no arguments keep the plain usage error.
 var (
 	stdinReader io.Reader = os.Stdin
-	stdinIsTTY            = func() bool { return writerIsTTY(os.Stdin) }
+	stdinIsTTY            = func() bool { return term.IsTerminal(os.Stdin.Fd()) }
 )
 
 // writerIsTTY reports whether w is a terminal (character device file).
@@ -187,6 +190,7 @@ func (w *checkedWriter) Write(p []byte) (int, error) {
 }
 
 func run(args []string, stdout, stderr io.Writer) (code int) {
+	rawOut := stdout
 	out := &checkedWriter{w: stdout}
 	stdout = out
 	defer func() {
@@ -196,12 +200,14 @@ func run(args []string, stdout, stderr io.Writer) (code int) {
 	}()
 	if len(args) == 0 {
 		if stdinIsTTY() {
-			return runWizard(stdinReader, stdout, stderr)
+			return interactiveCommand("tui", nil, rawOut, stdout, stderr)
 		}
 		fmt.Fprint(stderr, usage)
 		return exitError
 	}
 	switch args[0] {
+	case "tui", "wizard":
+		return interactiveCommand(args[0], args[1:], rawOut, stdout, stderr)
 	case "uncover":
 		return cmdUncover(args[1:], stdout, stderr)
 	case "audit":
@@ -343,41 +349,20 @@ func cmdUncover(args []string, stdout, stderr io.Writer) int {
 	if fs.NArg() > 0 {
 		return fail(stderr, fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " ")))
 	}
-	if err := validateCommon(cf); err != nil {
-		return fail(stderr, err)
-	}
-	db, err := fingerprint.Load()
+	p, err := prepareCheck("uncover", ef, endpointFlags{}, "", false, cf)
 	if err != nil {
-		return fail(stderr, err)
-	}
-	cfg, err := config.Load(cf.configPath)
-	if err != nil {
-		return fail(stderr, err)
-	}
-	client, spec, err := resolveClient(cfg, ef, "", cf.timeout)
-	if err != nil {
-		return failWithHint(stderr, err)
+		return failSetup(stderr, err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	onProbe, done := probeProgress(stderr, !cf.jsonOut || cf.verbose, "endpoint")
-	res, err := probe.Fingerprint(ctx, client, db, probe.Options{MaxRequests: cf.maxRequests, MinConfidence: cf.minConfidence, OnProbe: onProbe})
-	done()
-	if err != nil {
-		return fail(stderr, err)
-	}
-	if cf.jsonOut {
-		out := uncoverOutput{"uncover", report.SanitizeURL(spec.Endpoint), spec.Model, spec.Transport, res}
-		if err := writeJSON(stdout, out); err != nil {
-			return fail(stderr, err)
+	r := p.execute(ctx, func(_ string, n int) {
+		if onProbe != nil {
+			onProbe(n)
 		}
-	} else {
-		report.Uncover(stdout, spec.Endpoint, spec.Model, spec.Transport, res, cf.verbose)
-	}
-	if res.Status == fingerprint.StatusIdentified {
-		return exitOK
-	}
-	return exitInconclusive
+	})
+	done()
+	return emitCheckResult(p, r, stdout, stderr)
 }
 
 func cmdFamilies(args []string, stdout, stderr io.Writer) int {
@@ -459,9 +444,6 @@ func cmdAudit(args []string, stdout, stderr io.Writer) int {
 	if fs.NArg() > 0 {
 		return fail(stderr, fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " ")))
 	}
-	if err := validateCommon(cf); err != nil {
-		return fail(stderr, err)
-	}
 	applyBoth := func(ef *endpointFlags) {
 		if ef.model == "" {
 			ef.model = bothModel
@@ -475,120 +457,97 @@ func cmdAudit(args []string, stdout, stderr io.Writer) int {
 	}
 	applyBoth(&target)
 	applyBoth(&official)
-	// The target endpoint may come from flags, XLFP_* purpose env vars, a
-	// profile, or config defaults; Resolve reports a precise error if none
-	// of them provides one.
-
-	db, err := fingerprint.Load()
-	if err != nil {
-		return fail(stderr, err)
-	}
-	cfg, err := config.Load(cf.configPath)
-	if err != nil {
-		return fail(stderr, err)
-	}
-	tClient, tSpec, err := resolveClient(cfg, target, "target", cf.timeout)
-	if err != nil {
-		return failWithHint(stderr, fmt.Errorf("target: %w", err))
-	}
-	claimed := db.NormalizeFamily(claim)
-	if claim != "" && claimed == "" {
-		return failWithHint(stderr, fmt.Errorf("unknown claimed family %q (known families: %s)", claim, strings.Join(db.Families(), ", ")))
-	}
-	if claimed == "" {
-		claimed = db.FamilyForModel(tSpec.Model)
-		if claimed == "" {
-			return failWithHint(stderr, fmt.Errorf("cannot infer claimed family from model %q; pass --claim (known families: %s)", tSpec.Model, strings.Join(db.Families(), ", ")))
-		}
-	}
-	// Resolve the official endpoint before spending any probe budget, so a
-	// bad official configuration fails before the target is touched.
-	var oClient *probe.Client
-	var oSpec config.EndpointSpec
-	// An explicitly empty official selector opts out of ambient defaults.
-	// In particular, the wizard's "leave blank to skip" must mean skip.
 	explicitOfficial := false
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "official-url" || f.Name == "official-endpoint" || f.Name == "official-profile" {
 			explicitOfficial = true
 		}
 	})
-	hasOfficial := official.endpoint != "" || official.profile != "" || (!explicitOfficial && os.Getenv("XLFP_OFFICIAL_ENDPOINT") != "")
-	if hasOfficial {
-		client, spec, err := resolveClient(cfg, official, "official", cf.timeout)
-		if err != nil {
-			return failWithHint(stderr, fmt.Errorf("official: %w", err))
-		}
-		oClient, oSpec = client, spec
+	p, err := prepareCheck("audit", target, official, claim, hasOfficialEndpoint(official, explicitOfficial), cf)
+	if err != nil {
+		return failSetup(stderr, err)
 	}
-
-	var oPtr *fingerprint.Result
-	emit := func(res compare.Result) int {
-		if cf.jsonOut {
-			out := auditOutput{Command: "audit", TargetEndpoint: report.SanitizeURL(tSpec.Endpoint), TargetModel: tSpec.Model, Result: res}
-			if hasOfficial {
-				out.OfficialEndpoint = report.SanitizeURL(oSpec.Endpoint)
-				out.OfficialModel = oSpec.Model
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	var done func()
+	var onProbe func(int)
+	lastSide := ""
+	r := p.execute(ctx, func(side string, n int) {
+		if side != lastSide {
+			if done != nil {
+				done()
 			}
+			lastSide = side
+			onProbe, done = probeProgress(stderr, !cf.jsonOut || cf.verbose, side)
+		}
+		if onProbe != nil {
+			onProbe(n)
+		}
+	})
+	if done != nil {
+		done()
+	}
+	return emitCheckResult(p, r, stdout, stderr)
+}
+
+func failSetup(stderr io.Writer, err error) int {
+	var setup *checkSetupError
+	if errors.As(err, &setup) && setup.hint {
+		return failWithHint(stderr, err)
+	}
+	return fail(stderr, err)
+}
+
+// emitCheckResult is shared by CLI and dashboard report views.
+func emitCheckResult(p *preparedCheck, r checkResult, stdout, stderr io.Writer) int {
+	if r.err != nil {
+		return fail(stderr, r.err)
+	}
+	cf := p.common
+	if p.mode == "uncover" {
+		if r.uncover == nil {
+			return fail(stderr, fmt.Errorf("check produced no result"))
+		}
+		res := *r.uncover
+		if cf.jsonOut {
+			out := uncoverOutput{"uncover", report.SanitizeURL(p.targetSpec.Endpoint), p.targetSpec.Model, p.targetSpec.Transport, res}
 			if err := writeJSON(stdout, out); err != nil {
 				return fail(stderr, err)
 			}
 		} else {
-			officialLabel := ""
-			if hasOfficial {
-				officialLabel = oSpec.Endpoint
-			}
-			report.Audit(stdout, tSpec.Endpoint, officialLabel, res, cf.verbose)
+			report.Uncover(stdout, p.targetSpec.Endpoint, p.targetSpec.Model, p.targetSpec.Transport, res, cf.verbose)
 		}
-		switch res.Verdict {
-		case compare.VerdictMatch:
+		if res.Status == fingerprint.StatusIdentified {
 			return exitOK
-		case compare.VerdictMismatch:
-			return exitMismatch
-		default:
-			return exitInconclusive
 		}
+		return exitInconclusive
 	}
-
-	// A claim no verified family can judge is predetermined inconclusive;
-	// report it without spending probe budget. The fingerprint itself is
-	// still available via `xlfp uncover`.
-	if !db.IsVerified(claimed) {
-		reason := fmt.Sprintf("claimed family %q is not a verified family in database v%s, so no verdict can be rendered for it", claimed, db.Version)
-		return emit(compare.Result{
-			Verdict: compare.VerdictInconclusive, ClaimedFamily: claimed, Reason: reason, ReasonCode: compare.ReasonUnverifiedClaim,
-			Target: fingerprint.Result{Status: fingerprint.StatusInconclusive, Reason: reason + "; endpoint not probed", DBVersion: db.Version, Rankings: []fingerprint.FamilyRank{}, Unverified: []fingerprint.FamilyRank{}, Observations: []fingerprint.Observation{}},
-		})
+	if r.audit == nil {
+		return fail(stderr, fmt.Errorf("check produced no result"))
 	}
-
-	progressEnabled := !cf.jsonOut || cf.verbose
-	opts := probe.Options{MaxRequests: cf.maxRequests, MinConfidence: cf.minConfidence}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-	onProbe, done := probeProgress(stderr, progressEnabled, "target")
-	opts.OnProbe = onProbe
-	tRes, err := probe.Fingerprint(ctx, tClient, db, opts)
-	done()
-	if err != nil {
-		return fail(stderr, fmt.Errorf("target: %w", err))
-	}
-	if hasOfficial {
-		onProbe, done := probeProgress(stderr, progressEnabled, "official")
-		opts.OnProbe = onProbe
-		oRes, err := probe.Fingerprint(ctx, oClient, db, opts)
-		done()
-		if err != nil {
-			// Preserve the completed (paid) target evidence: report the
-			// target-only comparison, downgraded to inconclusive because
-			// the requested baseline could not be probed.
-			res := compare.Evaluate(db, claimed, tRes, nil)
-			res.RequestsSpent += oClient.Requests()
-			res.Verdict = compare.VerdictInconclusive
-			res.ReasonCode = compare.ReasonOfficialFailed
-			res.Reason = fmt.Sprintf("official baseline probing failed (%v); target-only result is shown but no verdict is safe", err)
-			return emit(res)
+	res := *r.audit
+	if cf.jsonOut {
+		out := auditOutput{Command: "audit", TargetEndpoint: report.SanitizeURL(p.targetSpec.Endpoint), TargetModel: p.targetSpec.Model, Result: res}
+		if p.official != nil {
+			out.OfficialEndpoint = report.SanitizeURL(p.officialSpec.Endpoint)
+			out.OfficialModel = p.officialSpec.Model
 		}
-		oPtr = &oRes
+		if err := writeJSON(stdout, out); err != nil {
+			return fail(stderr, err)
+		}
+	} else {
+		officialLabel := ""
+		if p.official != nil {
+			officialLabel = p.officialSpec.Endpoint
+		}
+		report.Audit(stdout, p.targetSpec.Endpoint, officialLabel, res, cf.verbose)
 	}
-	return emit(compare.Evaluate(db, claimed, tRes, oPtr))
+	switch res.Verdict {
+	case compare.VerdictMatch:
+		return exitOK
+	case compare.VerdictMismatch:
+		return exitMismatch
+	default:
+		return exitInconclusive
+	}
 }

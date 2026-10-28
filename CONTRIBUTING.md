@@ -8,8 +8,9 @@ go test -race -count=1 ./...
 go build -o xlfp .
 ```
 
-There are no Go module dependencies; please keep it that way unless a
-change clearly pays for one.
+The terminal dashboard uses pinned Go module dependencies. Keep new
+dependencies focused and justified, and update the bundled third-party
+notices when dependencies change.
 
 ## Ground rules
 

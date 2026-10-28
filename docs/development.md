@@ -1,6 +1,8 @@
 # Development
 
-Requirements: Go 1.23+. There are no Go module dependencies.
+Requirements: Go 1.23+. The terminal dashboard uses pinned Go modules;
+the CLI and dashboard share the same check preparation and execution code.
+Release archives include the bundled third-party license notices.
 
 ```bash
 go build -o xlfp .

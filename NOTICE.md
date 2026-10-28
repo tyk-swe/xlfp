@@ -8,6 +8,15 @@ DeepSeek, Mistral AI, Zhipu AI (GLM), or Xiaomi (MiMo). Product and
 model names are used only to identify the tokenizers/endpoints being
 measured.
 
+## Go dependencies
+
+The terminal dashboard includes Bubble Tea, Bubbles, and their dependencies.
+The module versions are pinned in [go.mod](./go.mod). Their license and
+attribution texts are included in [THIRD_PARTY_LICENSES.txt](./THIRD_PARTY_LICENSES.txt)
+and in release archives. `github.com/mattn/go-localereader` v0.0.1 does
+not ship a separate license file; its upstream README identifies its license
+as MIT and its author as Yasuhiro Matsumoto.
+
 ## Fingerprint database sources
 
 `pkg/fingerprint/db.json` contains only integer token counts for the
