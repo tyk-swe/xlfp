@@ -124,6 +124,25 @@ func TestTokRankInsufficient(t *testing.T) {
 	}
 }
 
+func TestTokRankFloorDominatedClaimsUnchecked(t *testing.T) {
+	db, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, varied := range []bool{false, true} {
+		obs := tokObsForEntry(t, db, "deepseek-v3", func(i, _ int) int {
+			if varied {
+				return 1000 + i*17
+			}
+			return 1000
+		})
+		got := db.TokRank(obs, "deepseek-chat", TokParams{})
+		if got.Verdict != TokVerdictInconclusive || got.ReasonCode != "unreliable_counts" || got.Claim == nil || got.Claim.Status != "unchecked" {
+			t.Fatalf("floor-only likelihoods became claim evidence (varied=%v): %+v", varied, got)
+		}
+	}
+}
+
 func TestTokRankInsufficientClaimUnchecked(t *testing.T) {
 	db, err := Load()
 	if err != nil {

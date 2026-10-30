@@ -37,6 +37,7 @@ const (
 	TokReasonAmbiguous           = "ambiguous_tokenizer"
 	TokReasonUnverified          = "unverified_tokenizer"
 	TokReasonNoEntries           = "no_entries"
+	TokReasonUnreliableCounts    = "unreliable_counts"
 )
 
 // TokVerdict values.
@@ -227,9 +228,10 @@ type tokObsAt struct {
 }
 
 type tokPosterior struct {
-	exact     []float64 // per entry
-	related   []float64 // per entry
-	unrelated float64
+	exact       []float64 // per entry
+	related     []float64 // per entry
+	unrelated   float64
+	informative bool
 }
 
 func (db *DB) tokPosterior(obs []TokObservation, tp TokParams) (tokPosterior, []tokObsAt) {
@@ -253,13 +255,21 @@ func (db *DB) tokPosterior(obs []TokObservation, tp TokParams) (tokPosterior, []
 		return post, at
 	}
 	logs := make([]float64, 0, 2*n+1)
-	for _, e := range db.Entries {
-		logs = append(logs, math.Log(tp.PriorExact/float64(n))+tp.atomLogLik(e, at, tp.ExactContamination))
+	minLL, maxLL := math.Inf(1), math.Inf(-1)
+	add := func(prior, ll float64) {
+		logs = append(logs, math.Log(prior)+ll)
+		minLL, maxLL = math.Min(minLL, ll), math.Max(maxLL, ll)
 	}
 	for _, e := range db.Entries {
-		logs = append(logs, math.Log(tp.PriorRelated/float64(n))+tp.atomLogLik(e, at, tp.RelatedContamination))
+		add(tp.PriorExact/float64(n), tp.atomLogLik(e, at, tp.ExactContamination))
 	}
-	logs = append(logs, math.Log(tp.PriorUnrelated)+tp.unrelatedLogLik(db.Entries, at))
+	for _, e := range db.Entries {
+		add(tp.PriorRelated/float64(n), tp.atomLogLik(e, at, tp.RelatedContamination))
+	}
+	add(tp.PriorUnrelated, tp.unrelatedLogLik(db.Entries, at))
+	// Equal likelihoods leave only the priors, including when every
+	// residual hits the likelihood floor. They cannot check a claim.
+	post.informative = maxLL-minLL > 1e-9
 	total := logSumExp(logs)
 	for i := range db.Entries {
 		post.exact[i] = math.Exp(logs[i] - total)
@@ -310,6 +320,11 @@ func (db *DB) TokRank(obs []TokObservation, model string, params TokParams) TokR
 	if len(at) < MinTokProbes {
 		res.ReasonCode = TokReasonInsufficient
 		res.Reason = fmt.Sprintf("only %d usable differential counts; at least %d are required", len(at), MinTokProbes)
+		return res
+	}
+	if !post.informative {
+		res.ReasonCode = TokReasonUnreliableCounts
+		res.Reason = "differential counts do not distinguish the tokenizer hypotheses"
 		return res
 	}
 	switch {

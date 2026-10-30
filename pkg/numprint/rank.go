@@ -270,8 +270,8 @@ func (b *Bank) Score(answers []Answer, opts ScoreOptions) Result {
 	}
 	scores := combinedScores(entries, entryFeats, parsed, b.Params.LDA)
 	// Imported LDA parameters have no independent calibration data.
-	// Also guard older banks that retained a temperature fitted with leakage.
-	res.Calibrated = b.Params.LDA == nil && b.Params.Temperature > 0 && len(parsed) >= 3
+	// Older temperatures do not record their fitted answer aggregation.
+	res.Calibrated = b.Params.LDA == nil && b.Params.Temperature > 0 && b.Params.CalibrationAnswers == calibrationAnswers && len(parsed) == calibrationAnswers
 	var confs []float64
 	if res.Calibrated {
 		confs = softmaxTemp(scores, b.Params.Temperature)
@@ -298,7 +298,7 @@ func (b *Bank) Score(answers []Answer, opts ScoreOptions) Result {
 	res.TopEntryID = res.Candidates[0].EntryID
 	res.TopFamily = res.Candidates[0].Family
 	if !res.Calibrated {
-		res.Reason = "ranking only: confidence needs a fitted calibration and at least 3 valid answers"
+		res.Reason = "ranking only: confidence needs fitted three-answer calibration and exactly 3 valid answers"
 		if b.Params.LDA != nil {
 			res.Reason = "ranking only: the imported LDA model has no independent confidence calibration"
 		}

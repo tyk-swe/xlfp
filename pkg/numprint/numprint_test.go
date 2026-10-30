@@ -97,7 +97,7 @@ func TestParseSequenceRejectsSignedTokens(t *testing.T) {
 }
 
 func TestEvidenceLengthPolicy(t *testing.T) {
-	base, overlong := synthBank(t, 3), synthBank(t, 3)
+	base, overlong := synthBank(t, 4), synthBank(t, 4)
 	for ei := range overlong.Entries {
 		for si := range overlong.Entries[ei].Samples {
 			s := &overlong.Entries[ei].Samples[si]
@@ -128,6 +128,11 @@ func TestEvidenceLengthPolicy(t *testing.T) {
 	wantScores, _ := looScores(base.Entries)
 	if !reflect.DeepEqual(gotScores, wantScores) {
 		t.Error("leave-one-out calibration includes overshoot")
+	}
+	gotScores, _ = calibrationScores(overlong.Entries)
+	wantScores, _ = calibrationScores(base.Entries)
+	if !reflect.DeepEqual(gotScores, wantScores) {
+		t.Error("held-out-round calibration includes overshoot")
 	}
 }
 
@@ -245,6 +250,38 @@ func TestRetrainAndCalibratedScore(t *testing.T) {
 	res = b.Score(answersFromSeqs(seqs[:1]), ScoreOptions{})
 	if res.Calibrated || (len(res.Candidates) > 0 && res.Candidates[0].Confidence != 0) {
 		t.Fatalf("single answer must be uncalibrated: %+v", res)
+	}
+}
+
+func TestCalibrationRequiresHeldOutRound(t *testing.T) {
+	b := synthBank(t, 3)
+	if _, err := Retrain(b); err != nil {
+		t.Fatal(err)
+	}
+	answers := answersFromSeqs([][]int{b.Entries[0].Samples[0].Sequence, b.Entries[0].Samples[1].Sequence, b.Entries[0].Samples[2].Sequence})
+	if got := b.Score(answers, ScoreOptions{}); got.Status != StatusRanked || got.Calibrated {
+		t.Fatalf("withholding a three-answer round leaves no reference samples: %+v", got)
+	}
+	// Temperatures from older banks do not identify their fitted aggregation.
+	b.Params.Temperature = 1
+	if got := b.Score(answers, ScoreOptions{}); got.Calibrated {
+		t.Fatal("legacy temperature treated as three-answer calibration")
+	}
+	b = synthBank(t, 8)
+	if _, err := Retrain(b); err != nil {
+		t.Fatal(err)
+	}
+	answers = append(answers, answers[0])
+	if got := b.Score(answers, ScoreOptions{}); got.Calibrated {
+		t.Fatal("three-answer calibration applied to four-answer predictions")
+	}
+}
+
+func TestFitTemperatureCanRemainUncalibrated(t *testing.T) {
+	for _, truth := range [][]int{{1, 0}, {0, 0}} {
+		if got := fitTemperature([][]float64{{1, -1}, {-1, 1}}, truth); got != 0 {
+			t.Errorf("chance-or-worse predictions fitted confident temperature %g", got)
+		}
 	}
 }
 

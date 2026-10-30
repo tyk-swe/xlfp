@@ -6,7 +6,8 @@ import (
 	"sort"
 )
 
-// EvalReport summarizes leave-one-out evaluation from Retrain.
+// EvalReport summarizes single-answer leave-one-out evaluation and
+// held-out-round calibration from Retrain.
 type EvalReport struct {
 	Samples     int                `json:"samples"`
 	Top1        int                `json:"top1_correct"`
@@ -111,22 +112,52 @@ func looScores(entries []Entry) ([][]float64, []int) {
 	return out, truth
 }
 
-// fitTemperature grid-searches the softmax temperature minimizing
-// mean negative log-likelihood of the true entry under
-// leave-one-out scores.
+const calibrationAnswers = 3
+
+// calibrationScores holds out complete three-answer rounds from the
+// reference features and uses exactly the inference aggregation.
+func calibrationScores(entries []Entry) ([][]float64, []int) {
+	all := make([][][]float64, len(entries))
+	for i, e := range entries {
+		if len(e.Samples) <= calibrationAnswers {
+			return nil, nil // A held-out round must leave reference samples.
+		}
+		all[i] = entryFeatures(e, -1)
+	}
+	var scores [][]float64
+	var truth []int
+	for ei, e := range entries {
+		for start := 0; start+calibrationAnswers <= len(e.Samples); start += calibrationAnswers {
+			end := start + calibrationAnswers
+			feats := append([][][]float64(nil), all...)
+			feats[ei] = append([][]float64(nil), all[ei][:start]...)
+			feats[ei] = append(feats[ei], all[ei][end:]...)
+			var answers []parsedAnswer
+			for _, f := range all[ei][start:end] {
+				answers = append(answers, parsedAnswer{feat: f})
+			}
+			scores = append(scores, combinedScores(entries, feats, answers, nil))
+			truth = append(truth, ei)
+		}
+	}
+	return scores, truth
+}
+
+// fitTemperature minimizes held-out negative log-likelihood, allowing
+// a uniform baseline. Zero means no candidate improved on chance.
 func fitTemperature(scores [][]float64, truth []int) float64 {
 	if len(scores) == 0 {
 		return 0
 	}
-	bestT, bestNLL := 0.0, math.Inf(1)
-	for _, t := range []float64{0.05, 0.08, 0.12, 0.18, 0.27, 0.4, 0.6, 0.9, 1.35, 2.0} {
+	bestT, bestNLL := 0.0, math.Log(float64(len(scores[0])))
+	for _, t := range []float64{0.05, 0.08, 0.12, 0.18, 0.27, 0.4, 0.6, 0.9, 1.35, 2.0, 4, 8, 16, 32, 64, 128} {
 		nll := 0.0
 		for i, s := range scores {
 			p := softmaxTemp(s, t)[truth[i]]
 			nll += -math.Log(math.Max(p, 1e-12))
 		}
 		nll /= float64(len(scores))
-		if nll < bestNLL {
+		if nll < bestNLL-1e-9 {
 			bestNLL, bestT = nll, t
 		}
 	}
@@ -137,7 +168,8 @@ func fitTemperature(scores [][]float64, truth []int) float64 {
 // samples: reply-check limits and the calibration temperature,
 // with a leave-one-out evaluation report. Imported LDA models are
 // excluded from evaluation and remain uncalibrated. Every eligible
-// entry needs at least 3 samples.
+// entry needs at least 3 samples for evaluation, and at least 4 to
+// leave reference data after holding out a calibration round.
 func Retrain(b *Bank) (EvalReport, error) {
 	entries := b.EligibleEntries()
 	if len(entries) < 2 {
@@ -152,7 +184,8 @@ func Retrain(b *Bank) (EvalReport, error) {
 	scores, truth := looScores(entries)
 	temp := 0.0
 	if b.Params.LDA == nil {
-		temp = fitTemperature(scores, truth)
+		calScores, calTruth := calibrationScores(entries)
+		temp = fitTemperature(calScores, calTruth)
 	}
 	rep := EvalReport{
 		Samples: len(scores), Temperature: temp, SeqLimits: limits,
@@ -181,6 +214,10 @@ func Retrain(b *Bank) (EvalReport, error) {
 	}
 	b.Params.SeqLimits = limits
 	b.Params.Temperature = temp
+	b.Params.CalibrationAnswers = 0
+	if temp > 0 {
+		b.Params.CalibrationAnswers = calibrationAnswers
+	}
 	return rep, b.Validate()
 }
 

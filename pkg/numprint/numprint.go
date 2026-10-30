@@ -36,12 +36,13 @@ const (
 
 // Sample is one reference answer stored in the bank.
 type Sample struct {
-	ID            string `json:"id"`
-	Environment   string `json:"environment,omitempty"`
-	ExpectedCount int    `json:"expected_count"`
-	Sequence      []int  `json:"sequence"`
-	CollectedAt   string `json:"collected_at,omitempty"`
-	EndpointHost  string `json:"endpoint_host,omitempty"`
+	ID            string            `json:"id"`
+	Environment   string            `json:"environment,omitempty"`
+	ExpectedCount int               `json:"expected_count"`
+	Sequence      []int             `json:"sequence"`
+	CollectedAt   string            `json:"collected_at,omitempty"`
+	EndpointHost  string            `json:"endpoint_host,omitempty"`
+	Collection    *CollectionParams `json:"collection,omitempty"`
 }
 
 // Entry is one candidate model in the reference bank.
@@ -79,13 +80,14 @@ type LDAParams struct {
 	Means      map[string][]float64 `json:"means"` // per entry id
 }
 
-// Params holds fitted detector parameters. Temperature <= 0 means
-// confidence is uncalibrated: rankings are reported without
-// confidence values. Imported LDA models always remain uncalibrated.
+// Params holds fitted detector parameters. Confidence requires a
+// positive temperature and a matching recorded answer aggregation.
+// Imported LDA models always remain uncalibrated.
 type Params struct {
-	SeqLimits   SeqLimits  `json:"seq_limits"`
-	Temperature float64    `json:"temperature,omitempty"`
-	LDA         *LDAParams `json:"lda,omitempty"`
+	SeqLimits          SeqLimits  `json:"seq_limits"`
+	Temperature        float64    `json:"temperature,omitempty"`
+	CalibrationAnswers int        `json:"calibration_answers,omitempty"`
+	LDA                *LDAParams `json:"lda,omitempty"`
 }
 
 // Bank is the reference bank plus its fitted parameters.

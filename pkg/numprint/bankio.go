@@ -47,19 +47,30 @@ type BatchFailure struct {
 	Error string `json:"error"`
 }
 
+// CollectionParams records the transport and CLI collection settings.
+// It deliberately excludes endpoint credentials.
+type CollectionParams struct {
+	Transport   string `json:"transport"`
+	Stream      bool   `json:"stream"`
+	Effort      string `json:"effort"`
+	ServiceTier string `json:"service_tier"`
+	Timeout     string `json:"timeout"`
+}
+
 // Batch is one portable sampling result for a single model,
 // collected by `xlfp sample`.
 type Batch struct {
-	ID           string         `json:"id,omitempty"` // scopes collected sample IDs; absent in legacy batches
-	Version      string         `json:"version"`
-	EntryID      string         `json:"entry_id"`
-	Family       string         `json:"family"`
-	Display      string         `json:"display,omitempty"`
-	Model        string         `json:"model"`
-	EndpointHost string         `json:"endpoint_host"`
-	CollectedAt  string         `json:"collected_at"`
-	Samples      []BatchSample  `json:"samples"`
-	Failures     []BatchFailure `json:"failures,omitempty"`
+	ID           string            `json:"id,omitempty"` // scopes collected sample IDs; absent in legacy batches
+	Version      string            `json:"version"`
+	EntryID      string            `json:"entry_id"`
+	Family       string            `json:"family"`
+	Display      string            `json:"display,omitempty"`
+	Model        string            `json:"model"`
+	EndpointHost string            `json:"endpoint_host"`
+	CollectedAt  string            `json:"collected_at"`
+	Collection   *CollectionParams `json:"collection,omitempty"`
+	Samples      []BatchSample     `json:"samples"`
+	Failures     []BatchFailure    `json:"failures,omitempty"`
 }
 
 // LoadBatchFile reads and validates a sampling batch.
@@ -159,6 +170,11 @@ func (b *Bank) Enroll(batch *Batch) (int, error) {
 		idx = len(b.Entries) - 1
 	}
 	added := 0
+	var collection *CollectionParams
+	if batch.Collection != nil {
+		snapshot := *batch.Collection
+		collection = &snapshot
+	}
 	for _, s := range batch.Samples {
 		seq := s.Sequence
 		if seq == nil {
@@ -167,6 +183,7 @@ func (b *Bank) Enroll(batch *Batch) (int, error) {
 		b.Entries[idx].Samples = append(b.Entries[idx].Samples, Sample{
 			ID: s.ID, Environment: s.Environment, ExpectedCount: s.ExpectedCount,
 			Sequence: seq, CollectedAt: batch.CollectedAt, EndpointHost: batch.EndpointHost,
+			Collection: collection,
 		})
 		added++
 	}

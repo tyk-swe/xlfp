@@ -140,9 +140,12 @@ value distribution plus position/final-digit blocks), and ranked
 against the reference bank by an equal-weight ensemble of centroid
 cosine, k-nearest-neighbour distance, and an optional LDA
 discriminant fitted offline. Confidence is a temperature-scaled
-softmax fitted by leave-one-out evaluation; with no fitted
-calibration or fewer than three valid answers the result is a
-ranking only. Imported LDA models also produce rankings without
+softmax fitted on held-out three-answer rounds using the same
+aggregation as inference. Calibration requires at least four
+samples per entry and must improve on uniform chance; otherwise,
+or with other than three valid answers, the result is a ranking
+only. Older banks need retraining to record this calibration.
+Imported LDA models also produce rankings without
 calibrated confidence; leave-one-out reports exclude the externally
 fitted LDA projection and evaluate centroid/kNN only.
 The ranking is **closed-set within the bank**: a
@@ -157,6 +160,11 @@ zero requests. Exit codes: 0 when every round ranked, 2 otherwise,
 Scoring, retraining, and feature export use at most the requested
 number of values from each reply, including in strict mode. The
 full captured reply remains available in saved evidence.
+
+Sampling records transport, streaming, reasoning effort, service
+tier, and timeout in each batch and enrolled sample. Resuming
+requires matching settings and endpoint host. Legacy batches
+without recorded settings can be replayed but cannot be resumed.
 
 The bank ships empty (`insufficient_bank`) until reference samples
 are collected with `xlfp sample` (fixed 36-challenge set across 12

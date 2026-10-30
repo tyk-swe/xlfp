@@ -418,6 +418,7 @@ func cmdSample(args []string, stdout, stderr io.Writer) int {
 		ID: fmt.Sprintf("%x", batchID), Version: "1", EntryID: id, Family: strings.ToLower(*family), Display: *display,
 		Model: spec.Model, EndpointHost: endpointHost(spec.Endpoint),
 		CollectedAt: time.Now().UTC().Format(time.RFC3339),
+		Collection:  &numprint.CollectionParams{Transport: spec.Transport, Stream: !*noStream, Effort: *effort, ServiceTier: *serviceTier, Timeout: cf.timeout.String()},
 	}
 	doneIDs := map[string]bool{}
 	if *resume {
@@ -427,6 +428,9 @@ func cmdSample(args []string, stdout, stderr io.Writer) int {
 			}
 			if !strings.EqualFold(existing.EndpointHost, batch.EndpointHost) {
 				return fail(stderr, fmt.Errorf("--resume: existing batch endpoint host is %q, flags say %q", existing.EndpointHost, batch.EndpointHost))
+			}
+			if existing.Collection == nil || *existing.Collection != *batch.Collection {
+				return fail(stderr, fmt.Errorf("--resume: collection parameters differ or were not recorded; start a new batch"))
 			}
 			batch = existing
 			for _, s := range batch.Samples {

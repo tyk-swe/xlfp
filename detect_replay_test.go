@@ -85,6 +85,7 @@ func TestSamplePersistsCompletion(t *testing.T) {
 			defer srv.Close()
 			set := numprint.SamplingSet()
 			batch := &numprint.Batch{Version: "1", EntryID: "m", Family: "f", Model: "m", EndpointHost: endpointHost(srv.URL)}
+			batch.Collection = &numprint.CollectionParams{Transport: "openai", Stream: mode == "stream", Timeout: "2m0s"}
 			for _, sc := range set[:len(set)-1] {
 				batch.Samples = append(batch.Samples, numprint.BatchSample{ID: sc.ID, ExpectedCount: sc.Challenge.ExpectedCount, Text: text})
 			}
@@ -228,6 +229,7 @@ func TestSampleResumeChecksEndpointHost(t *testing.T) {
 			}))
 			defer srv.Close()
 			batch := &numprint.Batch{Version: "1", EntryID: "model-a", Family: "fam-a", Model: "model-a", EndpointHost: host}
+			batch.Collection = &numprint.CollectionParams{Transport: "openai", Timeout: "2m0s"}
 			if host == "same" {
 				batch.EndpointHost = endpointHost(srv.URL)
 			}
