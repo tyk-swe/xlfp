@@ -53,7 +53,14 @@ const maxChatTextBytes = 2 << 20
 // callers decide how to treat a failed sample, and every HTTP attempt
 // counts toward Client.Requests. The client's HTTP timeout bounds
 // the whole exchange, including streaming reads.
-func (c *Client) Chat(ctx context.Context, r ChatRequest) (ChatResult, error) {
+func (c *Client) Chat(ctx context.Context, r ChatRequest) (res ChatResult, err error) {
+	// Redact the assembled reply on every return path, including partial
+	// streaming replies. A key can span multiple streaming events.
+	defer func() {
+		if c.Spec.APIKey != "" {
+			res.Text = strings.ReplaceAll(res.Text, c.Spec.APIKey, "[redacted]")
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return ChatResult{}, err
 	}
@@ -76,7 +83,7 @@ func (c *Client) Chat(ctx context.Context, r ChatRequest) (ChatResult, error) {
 		return ChatResult{}, fmt.Errorf("chat: %s", c.safeErr(err))
 	}
 	defer resp.Body.Close()
-	res := ChatResult{HTTPStatus: resp.StatusCode}
+	res = ChatResult{HTTPStatus: resp.StatusCode}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 		raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})

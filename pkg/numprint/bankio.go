@@ -36,6 +36,8 @@ type BatchSample struct {
 	ExpectedCount int    `json:"expected_count"`
 	Text          string `json:"text"`
 	Sequence      []int  `json:"sequence"`
+	Truncated     bool   `json:"truncated,omitempty"`
+	Completed     bool   `json:"completed,omitempty"`
 }
 
 // BatchFailure records one failed collection attempt. Failures stay

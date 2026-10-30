@@ -161,7 +161,14 @@ func offlineRounds(raw []byte) ([]probe.NumRound, error) {
 	if trimmed == "" {
 		return nil, fmt.Errorf("input is empty")
 	}
-	if trimmed[0] != '{' && trimmed[0] != '[' {
+	// Bracketed integer replies are manual evidence too. Only select the
+	// structured decoder for arrays of answer objects (or empty arrays).
+	numericArray := false
+	if trimmed[0] == '[' {
+		first := strings.TrimSpace(trimmed[1:])
+		numericArray = len(first) > 0 && (first[0] == '-' || first[0] >= '0' && first[0] <= '9')
+	}
+	if numericArray || trimmed[0] != '{' && trimmed[0] != '[' {
 		// Manual mode: a pasted reply as plain text.
 		return []probe.NumRound{{Round: 1, Answers: []numprint.Answer{{Text: trimmed, Completed: true}}}}, nil
 	}
@@ -169,11 +176,6 @@ func offlineRounds(raw []byte) ([]probe.NumRound, error) {
 		var answers []numprint.Answer
 		if err := json.Unmarshal(raw, &answers); err != nil {
 			return nil, fmt.Errorf("input: %w", err)
-		}
-		for i := range answers {
-			if !answers[i].Truncated {
-				answers[i].Completed = true
-			}
 		}
 		return []probe.NumRound{{Round: 1, Answers: answers}}, nil
 	}
@@ -203,7 +205,10 @@ func offlineRounds(raw []byte) ([]probe.NumRound, error) {
 				if text == "" {
 					text = joinInts(s.Sequence)
 				}
-				answers = append(answers, numprint.Answer{ChallengeID: s.ID, ExpectedCount: s.ExpectedCount, Text: text, Completed: true})
+				answers = append(answers, numprint.Answer{
+					ChallengeID: s.ID, ExpectedCount: s.ExpectedCount, Text: text,
+					Completed: s.Completed, Truncated: s.Truncated,
+				})
 			}
 			rounds = append(rounds, probe.NumRound{Round: len(rounds) + 1, Answers: answers})
 		}
@@ -455,6 +460,7 @@ func cmdSample(args []string, stdout, stderr io.Writer) int {
 				batch.Samples = append(batch.Samples, numprint.BatchSample{
 					ID: sc.ID, Environment: sc.Environment, ExpectedCount: sc.Challenge.ExpectedCount,
 					Text: res.Text, Sequence: seq,
+					Completed: res.Completed, Truncated: res.Truncated,
 				})
 			}
 		}
