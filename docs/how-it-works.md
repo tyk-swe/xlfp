@@ -154,6 +154,10 @@ answers array, a sampling batch, or a pasted reply offline with
 zero requests. Exit codes: 0 when every round ranked, 2 otherwise,
 1 on operational error.
 
+Scoring, retraining, and feature export use at most the requested
+number of values from each reply, including in strict mode. The
+full captured reply remains available in saved evidence.
+
 The bank ships empty (`insufficient_bank`) until reference samples
 are collected with `xlfp sample` (fixed 36-challenge set across 12
 prompt environments, failures kept on record, `--resume`

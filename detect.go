@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -409,8 +410,12 @@ func cmdSample(args []string, stdout, stderr io.Writer) int {
 	if id == "" {
 		id = slugify(spec.Model)
 	}
+	var batchID [16]byte
+	if _, err := rand.Read(batchID[:]); err != nil {
+		return fail(stderr, fmt.Errorf("create sampling batch identity: %w", err))
+	}
 	batch := &numprint.Batch{
-		Version: "1", EntryID: id, Family: strings.ToLower(*family), Display: *display,
+		ID: fmt.Sprintf("%x", batchID), Version: "1", EntryID: id, Family: strings.ToLower(*family), Display: *display,
 		Model: spec.Model, EndpointHost: endpointHost(spec.Endpoint),
 		CollectedAt: time.Now().UTC().Format(time.RFC3339),
 	}
@@ -435,7 +440,11 @@ func cmdSample(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 	set := numprint.SamplingSet()
 	for i, sc := range set {
-		if doneIDs[sc.ID] {
+		sampleID := sc.ID
+		if batch.ID != "" {
+			sampleID = batch.ID + "/" + sc.ID
+		}
+		if doneIDs[sampleID] {
 			continue
 		}
 		if ctx.Err() != nil {
@@ -452,16 +461,16 @@ func cmdSample(args []string, stdout, stderr io.Writer) int {
 		res, err := client.Chat(ctx, req)
 		switch {
 		case err != nil:
-			batch.Failures = append(batch.Failures, numprint.BatchFailure{ID: sc.ID, Error: err.Error()})
+			batch.Failures = append(batch.Failures, numprint.BatchFailure{ID: sampleID, Error: err.Error()})
 		case res.Error != "":
-			batch.Failures = append(batch.Failures, numprint.BatchFailure{ID: sc.ID, Error: res.Error})
+			batch.Failures = append(batch.Failures, numprint.BatchFailure{ID: sampleID, Error: res.Error})
 		default:
 			seq := numprint.ParseSequence(res.Text)
 			if verr := numprint.ValidateSequence(seq, sc.Challenge.ExpectedCount); verr != nil {
-				batch.Failures = append(batch.Failures, numprint.BatchFailure{ID: sc.ID, Error: verr.Error()})
+				batch.Failures = append(batch.Failures, numprint.BatchFailure{ID: sampleID, Error: verr.Error()})
 			} else {
 				batch.Samples = append(batch.Samples, numprint.BatchSample{
-					ID: sc.ID, Environment: sc.Environment, ExpectedCount: sc.Challenge.ExpectedCount,
+					ID: sampleID, Environment: sc.Environment, ExpectedCount: sc.Challenge.ExpectedCount,
 					Text: res.Text, Sequence: seq,
 					Completed: res.Completed, Truncated: res.Truncated,
 				})

@@ -31,10 +31,10 @@ func ParseSequence(text string) []int {
 			for j < len(runes) && runes[j] >= '0' && runes[j] <= '9' {
 				j++
 			}
-			// A digit run glued to a letter or a decimal point is
-			// part of a word/decimal, not a standalone integer.
+			// A digit run glued to a letter, decimal point, or
+			// leading sign is not a standalone unsigned integer.
 			afterOK := j >= len(runes) || !(unicode.IsLetter(runes[j]) || runes[j] == '.')
-			beforeOK := i == 0 || !(unicode.IsLetter(runes[i-1]) || runes[i-1] == '.')
+			beforeOK := i == 0 || !(unicode.IsLetter(runes[i-1]) || runes[i-1] == '.' || runes[i-1] == '-' || runes[i-1] == '+' || runes[i-1] == '−')
 			v, err := strconv.Atoi(string(runes[i:j]))
 			if err == nil && afterOK && beforeOK && v >= ValueMin && v <= ValueMax {
 				cur = append(cur, v)
@@ -59,6 +59,16 @@ func ParseSequence(text string) []int {
 // completed replies use ParseSequence directly and keep the last value.
 func CountIntegers(text string) int {
 	return len(ParseSequence(strings.TrimRight(text, "0123456789")))
+}
+
+// evidenceSequence applies the same requested-count cap to queries,
+// references, calibration, and feature export. Retained raw evidence
+// may include additional values; they do not affect the detector.
+func evidenceSequence(seq []int, expected int) []int {
+	if expected > 0 && len(seq) > expected {
+		return seq[:expected]
+	}
+	return seq
 }
 
 // SequenceStats summarizes one parsed sequence for the reply check.

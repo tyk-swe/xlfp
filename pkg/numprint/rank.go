@@ -63,9 +63,8 @@ type parsedAnswer struct {
 }
 
 // parseAnswers keeps scoreable answers under the strictness rules:
-// relaxed mode trims over-long replies to the requested count and
-// accepts early-stopped ones; strict mode requires naturally
-// completed replies and never trims.
+// all modes cap replies to the requested count; strict mode also
+// requires natural completion and rejects early-stopped replies.
 func parseAnswers(answers []Answer, opts ScoreOptions) []parsedAnswer {
 	var out []parsedAnswer
 	for _, a := range answers {
@@ -75,10 +74,7 @@ func parseAnswers(answers []Answer, opts ScoreOptions) []parsedAnswer {
 		if opts.Strict && (a.Truncated || !a.Completed) {
 			continue
 		}
-		seq := ParseSequence(a.Text)
-		if !opts.Strict && a.ExpectedCount > 0 && len(seq) > a.ExpectedCount {
-			seq = seq[:a.ExpectedCount]
-		}
+		seq := evidenceSequence(ParseSequence(a.Text), a.ExpectedCount)
 		if ValidateSequence(seq, a.ExpectedCount) != nil {
 			continue
 		}
@@ -95,7 +91,7 @@ func entryFeatures(e Entry, exclude int) [][]float64 {
 		if i == exclude {
 			continue
 		}
-		out = append(out, Featurize(s.Sequence))
+		out = append(out, Featurize(evidenceSequence(s.Sequence, s.ExpectedCount)))
 	}
 	return out
 }

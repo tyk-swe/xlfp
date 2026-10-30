@@ -160,6 +160,59 @@ func TestSampleJSON(t *testing.T) {
 	}
 }
 
+func TestSampleIndependentBatchesEnrollAndResume(t *testing.T) {
+	cleanEnv(t)
+	var calls atomic.Int64
+	text := strings.Repeat("37 173 ", 160)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		raw, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{
+			"message": map[string]any{"content": text}, "finish_reason": "stop",
+		}}})
+		_, _ = w.Write(raw)
+	}))
+	defer srv.Close()
+	bank, err := numprint.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := len(numprint.SamplingSet())
+	for i := 0; i < 2; i++ {
+		path := filepath.Join(t.TempDir(), "batch.json")
+		args := []string{"sample", "--endpoint", srv.URL, "--model", "m", "--family", "f", "--out", path, "--no-stream"}
+		if code, _, stderr := runCLI(t, args...); code != exitOK {
+			t.Fatalf("batch %d: exit %d: %s", i, code, stderr)
+		}
+		batch, err := numprint.LoadBatchFile(path)
+		if err != nil || len(batch.Samples) != n {
+			t.Fatalf("batch %d: %+v, %v", i, batch, err)
+		}
+		// Resume must keep identities stable and collect only the missing challenge.
+		missingID := batch.Samples[n-1].ID
+		batch.Samples = batch.Samples[:n-1]
+		if err := numprint.SaveBatchFile(path, batch); err != nil {
+			t.Fatal(err)
+		}
+		before := calls.Load()
+		if code, _, stderr := runCLI(t, append(args, "--resume")...); code != exitOK {
+			t.Fatalf("resume batch %d: exit %d: %s", i, code, stderr)
+		}
+		batch, err = numprint.LoadBatchFile(path)
+		if err != nil || len(batch.Samples) != n || batch.Samples[n-1].ID != missingID || calls.Load() != before+1 {
+			t.Fatalf("resume changed sample identities or repeated completed requests: %+v, %v", batch, err)
+		}
+		if added, err := bank.Enroll(batch); err != nil || added != n {
+			t.Fatalf("enroll independent batch %d: added %d: %v", i, added, err)
+		}
+		if added, err := bank.Enroll(batch); err == nil || added != 0 {
+			t.Fatalf("re-enrollment accepted batch %d: added %d: %v", i, added, err)
+		}
+	}
+	if len(bank.Entries) != 1 || len(bank.Entries[0].Samples) != 2*n {
+		t.Fatalf("independent samples were lost: %+v", bank)
+	}
+}
+
 func TestSampleResumeChecksEndpointHost(t *testing.T) {
 	cleanEnv(t)
 	for _, host := range []string{"other.example.com", "", "same"} {

@@ -50,6 +50,7 @@ type BatchFailure struct {
 // Batch is one portable sampling result for a single model,
 // collected by `xlfp sample`.
 type Batch struct {
+	ID           string         `json:"id,omitempty"` // scopes collected sample IDs; absent in legacy batches
 	Version      string         `json:"version"`
 	EntryID      string         `json:"entry_id"`
 	Family       string         `json:"family"`

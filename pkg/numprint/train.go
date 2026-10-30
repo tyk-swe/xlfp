@@ -50,7 +50,7 @@ func fitSeqLimits(entries []Entry) SeqLimits {
 			for i := 0; i+3 <= len(samples); i += 3 {
 				var ga, gs []float64
 				for _, s := range samples[i : i+3] {
-					st := Stats(s.Sequence)
+					st := Stats(evidenceSequence(s.Sequence, s.ExpectedCount))
 					ga = append(ga, st.Autocorr)
 					gs = append(gs, st.SmallStep)
 				}
@@ -63,7 +63,7 @@ func fitSeqLimits(entries []Entry) SeqLimits {
 		// Fall back to per-sample statistics.
 		for _, e := range entries {
 			for _, s := range e.Samples {
-				st := Stats(s.Sequence)
+				st := Stats(evidenceSequence(s.Sequence, s.ExpectedCount))
 				auts = append(auts, st.Autocorr)
 				steps = append(steps, st.SmallStep)
 			}
@@ -99,7 +99,9 @@ func looScores(entries []Entry) ([][]float64, []int) {
 					feats[j] = allFeats[j]
 				}
 			}
-			pa := parsedAnswer{seq: e.Samples[si].Sequence, feat: Featurize(e.Samples[si].Sequence), stats: Stats(e.Samples[si].Sequence)}
+			s := e.Samples[si]
+			seq := evidenceSequence(s.Sequence, s.ExpectedCount)
+			pa := parsedAnswer{seq: seq, feat: Featurize(seq), stats: Stats(seq)}
 			// An imported LDA projection and its class means were fitted
 			// on the full bank, including this held-out sample and label.
 			out = append(out, combinedScores(entries, feats, []parsedAnswer{pa}, nil))
@@ -201,7 +203,7 @@ func (b *Bank) ExportFeatures() FeatureExport {
 	out := FeatureExport{Version: b.Version, Dims: featureDims}
 	for _, e := range b.EligibleEntries() {
 		for _, s := range e.Samples {
-			out.Rows = append(out.Rows, FeatureExportRow{EntryID: e.ID, SampleID: s.ID, Feature: Featurize(s.Sequence)})
+			out.Rows = append(out.Rows, FeatureExportRow{EntryID: e.ID, SampleID: s.ID, Feature: Featurize(evidenceSequence(s.Sequence, s.ExpectedCount))})
 		}
 	}
 	return out

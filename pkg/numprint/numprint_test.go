@@ -3,6 +3,7 @@ package numprint
 import (
 	"fmt"
 	"math/rand"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -75,6 +76,58 @@ func TestParseSequence(t *testing.T) {
 	// Trailing partial digits still parse as the integers present.
 	if seq := ParseSequence("10 20 30 4"); len(seq) != 4 {
 		t.Fatalf("expected 4 integers, got %v", seq)
+	}
+}
+
+func TestParseSequenceRejectsSignedTokens(t *testing.T) {
+	for _, sign := range []string{"-", "+", "−"} {
+		text := sign + "37 173 286 "
+		if got := ParseSequence(text); fmt.Sprint(got) != "[173 286]" {
+			t.Errorf("ParseSequence(%q) = %v", text, got)
+		}
+		if got := CountIntegers(text); got != 2 {
+			t.Errorf("CountIntegers(%q) = %d, want 2", text, got)
+		}
+	}
+	// A signed token cannot bridge the minimum evidence threshold.
+	text := "-37 " + strings.Repeat("173 286 ", 82)
+	if err := ValidateSequence(ParseSequence(text), 300); err == nil {
+		t.Fatal("negative token counted toward the 165-value minimum")
+	}
+}
+
+func TestEvidenceLengthPolicy(t *testing.T) {
+	base, overlong := synthBank(t, 3), synthBank(t, 3)
+	for ei := range overlong.Entries {
+		for si := range overlong.Entries[ei].Samples {
+			s := &overlong.Entries[ei].Samples[si]
+			for i := 0; i < 200; i++ {
+				s.Sequence = append(s.Sequence, 355)
+			}
+		}
+	}
+	wantSeq := base.Entries[0].Samples[0].Sequence
+	wantFeat, wantStats := Featurize(wantSeq), Stats(wantSeq)
+	answer := Answer{ExpectedCount: 300, Text: sequenceString(overlong.Entries[0].Samples[0].Sequence), Completed: true}
+	for _, strict := range []bool{false, true} {
+		got := parseAnswers([]Answer{answer}, ScoreOptions{Strict: strict})
+		if len(got) != 1 || !reflect.DeepEqual(got[0].feat, wantFeat) || got[0].stats != wantStats {
+			t.Errorf("query features/stats include overshoot (strict=%v)", strict)
+		}
+	}
+	if !reflect.DeepEqual(entryFeatures(overlong.Entries[0], -1)[0], wantFeat) {
+		t.Error("reference features include overshoot")
+	}
+	if !reflect.DeepEqual(overlong.ExportFeatures().Rows[0].Feature, wantFeat) {
+		t.Error("exported LDA features include overshoot")
+	}
+	if fitSeqLimits(overlong.Entries) != fitSeqLimits(base.Entries) {
+		t.Error("reply-check training includes overshoot")
+	}
+	gotScores, _ := looScores(overlong.Entries)
+	wantScores, _ := looScores(base.Entries)
+	if !reflect.DeepEqual(gotScores, wantScores) {
+		t.Error("leave-one-out calibration includes overshoot")
 	}
 }
 
