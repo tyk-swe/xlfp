@@ -374,7 +374,32 @@ func (c *Client) readChatStream(ctx context.Context, body io.Reader, r ChatReque
 	// Bound raw reads before ReadString can allocate a complete line.
 	// Comments and metadata count toward the same limit as JSON data.
 	br := bufio.NewReaderSize(io.LimitReader(body, maxResponseBytes+1), 32<<10)
-	var text strings.Builder
+	var text, event strings.Builder
+	dispatch := func() bool {
+		payload := strings.TrimSpace(event.String())
+		event.Reset()
+		if payload == "[DONE]" {
+			res.Terminated = true
+			return true
+		}
+		if payload == "" {
+			return false
+		}
+		terminal := c.consumeStreamChunk([]byte(payload), &text, &res)
+		if text.Len() > maxChatTextBytes {
+			res.Error = "streamed reply exceeded size limit"
+			return true
+		}
+		if terminal {
+			res.Terminated = true
+			return true
+		}
+		if r.StopWhen != nil && r.StopWhen(text.String()) {
+			res.Truncated = true
+			return true
+		}
+		return false
+	}
 	rawBytes := 0
 	for {
 		if err := ctx.Err(); err != nil {
@@ -388,27 +413,17 @@ func (c *Client) readChatStream(ctx context.Context, body io.Reader, r ChatReque
 			break
 		}
 		line = strings.TrimRight(line, "\r\n")
-		if strings.HasPrefix(line, "data:") {
-			payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-			if payload == "[DONE]" {
-				res.Terminated = true
+		if line == "" {
+			if err == nil && dispatch() {
 				break
 			}
-			if payload != "" {
-				terminal := c.consumeStreamChunk([]byte(payload), &text, &res)
-				if text.Len() > maxChatTextBytes {
-					res.Error = "streamed reply exceeded size limit"
-					break
-				}
-				if terminal {
-					res.Terminated = true
-					break
-				}
-				if r.StopWhen != nil && r.StopWhen(text.String()) {
-					res.Truncated = true
-					break
-				}
-			}
+		} else if payload, ok := strings.CutPrefix(line, "data:"); ok {
+			// SSE joins data fields with newlines and dispatches only at
+			// a blank line. Comments and other fields do not end an event.
+			event.WriteString(strings.TrimPrefix(payload, " "))
+			event.WriteByte('\n')
+		} else if line == "data" {
+			event.WriteByte('\n')
 		}
 		if err != nil {
 			if err == io.EOF {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/tyk-swe/xlfp/pkg/numprint"
@@ -109,6 +111,100 @@ func TestSamplePersistsCompletion(t *testing.T) {
 			answer := answers[len(answers)-1]
 			if answer.Completed != (mode == "stop") || answer.Truncated != (mode == "stream") {
 				t.Fatalf("sample lost completion metadata in %s: %+v", mode, answer)
+			}
+		})
+	}
+}
+
+func TestSampleJSON(t *testing.T) {
+	cleanEnv(t)
+	for _, success := range []bool{true, false} {
+		t.Run(fmt.Sprint(success), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !success {
+					fmt.Fprint(w, `{"error":{"message":"collection failed"}}`)
+					return
+				}
+				text := strings.Repeat("37 173 ", 160)
+				raw, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": text}, "finish_reason": "stop"}}})
+				_, _ = w.Write(raw)
+			}))
+			defer srv.Close()
+			path := filepath.Join(t.TempDir(), "batch.json")
+			code, stdout, stderr := runCLI(t, "sample", "--endpoint", srv.URL, "--model", "m", "--family", "f", "--out", path, "--no-stream", "--json")
+			wantCode := exitError
+			if success {
+				wantCode = exitOK
+			}
+			if code != wantCode {
+				t.Fatalf("sample exit %d: %s", code, stderr)
+			}
+			var got numprint.Batch
+			if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+				t.Fatalf("invalid JSON stdout: %v: %q", err, stdout)
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var saved numprint.Batch
+			if err := json.Unmarshal(raw, &saved); err != nil {
+				t.Fatal(err)
+			}
+			gotJSON, _ := json.Marshal(got)
+			savedJSON, _ := json.Marshal(saved)
+			if !bytes.Equal(gotJSON, savedJSON) || len(got.Samples)+len(got.Failures) != len(numprint.SamplingSet()) {
+				t.Fatalf("stdout differs from saved collection: %+v", got)
+			}
+		})
+	}
+}
+
+func TestSampleResumeChecksEndpointHost(t *testing.T) {
+	cleanEnv(t)
+	for _, host := range []string{"other.example.com", "", "same"} {
+		t.Run(host, func(t *testing.T) {
+			var calls atomic.Int64
+			text := strings.TrimSpace(strings.Repeat("37 173 ", 150))
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				body, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{
+					"message": map[string]any{"content": text}, "finish_reason": "stop",
+				}}})
+				_, _ = w.Write(body)
+			}))
+			defer srv.Close()
+			batch := &numprint.Batch{Version: "1", EntryID: "model-a", Family: "fam-a", Model: "model-a", EndpointHost: host}
+			if host == "same" {
+				batch.EndpointHost = endpointHost(srv.URL)
+			}
+			set := numprint.SamplingSet()
+			for _, sc := range set[:len(set)-1] {
+				batch.Samples = append(batch.Samples, numprint.BatchSample{
+					ID: sc.ID, ExpectedCount: sc.Challenge.ExpectedCount, Text: text, Sequence: numprint.ParseSequence(text),
+				})
+			}
+			path := filepath.Join(t.TempDir(), "batch.json")
+			if err := numprint.SaveBatchFile(path, batch); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			code, _, stderr := runCLI(t, "sample", "--endpoint", srv.URL, "--model", "model-a", "--family", "fam-a", "--out", path, "--resume", "--no-stream")
+			if host == "same" {
+				if code != exitOK || calls.Load() != 1 {
+					t.Fatalf("same-host resume: exit=%d requests=%d stderr=%s", code, calls.Load(), stderr)
+				}
+				return
+			}
+			if code != exitError || calls.Load() != 0 || !strings.Contains(stderr, "--resume") {
+				t.Fatalf("mismatched-host resume: exit=%d requests=%d stderr=%s", code, calls.Load(), stderr)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("rejected resume changed the batch: %v", err)
 			}
 		})
 	}

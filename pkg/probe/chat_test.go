@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -77,6 +78,69 @@ func TestChatOpenAIStreamUsage(t *testing.T) {
 	}
 	if res.Text != "7 " || res.PromptTokens != 11 || !res.Completed || res.FinishReason != "stop" {
 		t.Fatalf("unexpected stream result: %+v", res)
+	}
+}
+
+func TestChatStreamMultilineEvents(t *testing.T) {
+	for _, tc := range []struct {
+		transport string
+		events    []string
+	}{
+		{config.TransportOpenAI, []string{
+			`{"choices":[{"delta":{"content":"37 173"},"finish_reason":"stop"}],"usage":{"prompt_tokens":17}}`,
+			`[DONE]`,
+		}},
+		{config.TransportAnthropic, []string{
+			`{"type":"message_start","message":{"usage":{"input_tokens":17}}}`,
+			`{"type":"content_block_delta","delta":{"type":"text_delta","text":"37 173"}}`,
+			`{"type":"message_delta","delta":{"stop_reason":"end_turn"}}`,
+			`{"type":"message_stop"}`,
+		}},
+		{config.TransportGemini, []string{
+			`{"candidates":[{"content":{"parts":[{"text":"37 173"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":17}}`,
+		}},
+		{config.TransportResponses, []string{
+			`{"type":"response.output_text.delta","delta":"37 173"}`,
+			`{"type":"response.completed","response":{"usage":{"input_tokens":17}}}`,
+		}},
+	} {
+		for _, newline := range []string{"\n", "\r\n"} {
+			t.Run(tc.transport+fmt.Sprintf("/%q", newline), func(t *testing.T) {
+				c := chatClient(t, tc.transport, func(w http.ResponseWriter, r *http.Request) {
+					for _, event := range tc.events {
+						var formatted bytes.Buffer
+						if event == "[DONE]" {
+							formatted.WriteString(event)
+						} else if err := json.Indent(&formatted, []byte(event), "", "  "); err != nil {
+							t.Error(err)
+						}
+						fmt.Fprint(w, "event: message"+newline)
+						for i, line := range strings.Split(formatted.String(), "\n") {
+							prefix := "data:"
+							if i%2 == 0 {
+								prefix += " "
+							}
+							fmt.Fprint(w, prefix+line+newline+": keepalive"+newline)
+						}
+						fmt.Fprint(w, newline)
+					}
+				})
+				res, err := c.Chat(context.Background(), ChatRequest{User: "numbers", Stream: true})
+				if err != nil || res.Error != "" || res.Text != "37 173" || !res.Completed || !res.HasUsage || res.PromptTokens != 17 {
+					t.Fatalf("multiline SSE lost evidence: %+v, %v", res, err)
+				}
+			})
+		}
+	}
+}
+
+func TestChatStreamRequiresEventDelimiter(t *testing.T) {
+	c := chatClient(t, config.TransportOpenAI, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"1 2\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n")
+	})
+	res, err := c.Chat(context.Background(), ChatRequest{User: "numbers", Stream: true})
+	if err != nil || res.Text != "1 2" || res.Completed || res.Terminated {
+		t.Fatalf("unterminated SSE event completed reply: %+v, %v", res, err)
 	}
 }
 
@@ -191,6 +255,7 @@ func TestChatStreamRawLimit(t *testing.T) {
 	for _, body := range []string{
 		":" + strings.Repeat("x", 5<<20),
 		strings.Repeat(":"+strings.Repeat("x", 1022)+"\n", 5120),
+		strings.Repeat("data: "+strings.Repeat("x", 1022)+"\n", 5120),
 	} {
 		c := &Client{Spec: config.EndpointSpec{Transport: config.TransportOpenAI}}
 		reader := &io.LimitedReader{R: strings.NewReader(body), N: int64(len(body))}
@@ -254,5 +319,30 @@ func TestChatHTTPErrorRedacted(t *testing.T) {
 	}
 	if res.HTTPStatus != 401 || res.Error == "" || strings.Contains(res.Error, "sk-secretvalue") {
 		t.Fatalf("error not redacted: %+v", res)
+	}
+}
+
+func TestRunNumbersWaitsForFinalInteger(t *testing.T) {
+	for _, delimiter := range []string{"", " "} {
+		t.Run(fmt.Sprintf("delimiter=%q", delimiter), func(t *testing.T) {
+			c := chatClient(t, config.TransportOpenAI, func(w http.ResponseWriter, r *http.Request) {
+				for _, delta := range []string{"10 20 3", "55", delimiter} {
+					chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"content": delta}}}})
+					fmt.Fprintf(w, "data: %s\n\n", chunk)
+				}
+				fmt.Fprint(w, "data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+			})
+			result := RunNumbers(context.Background(), c, &numprint.Bank{}, NumOptions{Count: 1, Stream: true,
+				Challenges: []numprint.Challenge{{ID: "test", ExpectedCount: 3, Prompt: "numbers"}},
+			})
+			answer := result.Rounds[0].Answers[0]
+			seq := numprint.ParseSequence(answer.Text)
+			if answer.Text != "10 20 355"+delimiter || len(seq) != 3 || seq[2] != 355 {
+				t.Fatalf("split integer corrupted: answer=%+v sequence=%v", answer, seq)
+			}
+			if answer.Completed != (delimiter == "") || answer.Truncated != (delimiter != "") {
+				t.Fatalf("unexpected completion metadata: %+v", answer)
+			}
+		})
 	}
 }

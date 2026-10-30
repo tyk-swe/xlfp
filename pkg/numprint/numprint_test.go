@@ -278,3 +278,76 @@ func TestStrictModeRejectsTruncated(t *testing.T) {
 		t.Fatalf("relaxed rejected truncated answer: %+v", res)
 	}
 }
+
+func TestCountIntegersWaitsForDelimiter(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		want int
+	}{
+		{"", 0},
+		{"10 20 3", 2},
+		{"10 20 355", 2},
+		{"10 20 355 ", 3},
+		{"10 20 355,", 3},
+		{"10 20 355、", 3},
+		{"10 20 355\n", 3},
+		{"10 20 30 done 4", 3},
+		{"10 20 3.5 ", 2},
+		{"10 20 3x ", 2},
+	} {
+		if got := CountIntegers(tc.text); got != tc.want {
+			t.Errorf("CountIntegers(%q) = %d, want %d", tc.text, got, tc.want)
+		}
+	}
+}
+
+func TestEnrollInvalidatesFittedParams(t *testing.T) {
+	for _, id := range []string{"a", "new"} {
+		t.Run(id, func(t *testing.T) {
+			b := synthBank(t, 4)
+			if _, err := Retrain(b); err != nil {
+				t.Fatal(err)
+			}
+			seq := synthSeq(rand.New(rand.NewSource(123)), centersA, 300)
+			batch := &Batch{EntryID: id, Family: "fam-" + id, Model: "model-" + id,
+				Samples: []BatchSample{{ID: "extra", ExpectedCount: 300, Sequence: seq}},
+			}
+			// Imported projections and class means also depend on the old samples.
+			b.Params.LDA = &LDAParams{Means: map[string][]float64{"a": {1}}}
+			if added, err := b.Enroll(batch); err != nil || added != 1 {
+				t.Fatalf("Enroll = %d, %v", added, err)
+			}
+			if b.Params.Temperature != 0 || b.Params.SeqLimits != (SeqLimits{}) || b.Params.LDA != nil {
+				t.Fatalf("enrollment kept stale fitted parameters: %+v", b.Params)
+			}
+			res := b.Score(answersFromSeqs([][]int{seq, seq, seq}), ScoreOptions{})
+			if res.Status != StatusRanked || res.Calibrated {
+				t.Fatalf("changed bank must be ranking-only: %+v", res)
+			}
+			for _, c := range res.Candidates {
+				if c.Confidence != 0 {
+					t.Fatalf("changed bank retained confidence: %+v", c)
+				}
+			}
+		})
+	}
+}
+
+func TestEnrollDuplicateDoesNotChangeCalibratedBank(t *testing.T) {
+	b := synthBank(t, 4)
+	if _, err := Retrain(b); err != nil {
+		t.Fatal(err)
+	}
+	params := b.Params
+	sample := b.Entries[0].Samples[0]
+	batch := &Batch{EntryID: "a", Family: "fam-a", Model: "model-a", Samples: []BatchSample{
+		{ID: "extra", ExpectedCount: 300, Sequence: sample.Sequence},
+		{ID: sample.ID, ExpectedCount: 300, Sequence: sample.Sequence},
+	}}
+	if added, err := b.Enroll(batch); err == nil || added != 0 {
+		t.Fatalf("duplicate batch: added=%d err=%v", added, err)
+	}
+	if len(b.Entries[0].Samples) != 4 || b.Params != params {
+		t.Fatal("failed enrollment changed the calibrated bank")
+	}
+}

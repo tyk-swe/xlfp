@@ -323,6 +323,13 @@ func (db *DB) TokRank(obs []TokObservation, model string, params TokParams) TokR
 		res.Verdict, res.TopEntryID, res.TopFamily = TokVerdictExact, e.ID, e.Family
 		res.Probability = round6(post.exact[bestExact])
 	case bestRelated >= 0 && post.related[bestRelated] >= post.unrelated && post.related[bestRelated] > post.exact[bestExact]:
+		for i, p := range post.related {
+			if i != bestRelated && math.Abs(p-post.related[bestRelated]) < 1e-12 {
+				res.ReasonCode = TokReasonAmbiguous
+				res.Reason = "evidence for a related tokenizer is split equally across multiple candidates"
+				return res
+			}
+		}
 		e := db.Entries[bestRelated]
 		if !e.Verified {
 			res.ReasonCode = TokReasonUnverified

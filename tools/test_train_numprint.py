@@ -50,6 +50,22 @@ class TestLoadFeatures(unittest.TestCase):
 
 @unittest.skipUnless(HAS_NUMPY, "numpy not installed")
 class TestFitLDA(unittest.TestCase):
+    def test_zero_within_class_variance(self):
+        rows = [
+            {"entry_id": eid, "sample_id": f"{eid}{i}", "feature": feature}
+            for eid, feature in [("a", [1.0, 0.0]), ("b", [0.0, 1.0])]
+            for i in range(3)
+        ]
+        params = train_numprint.fit_lda(2, rows)
+        W = numpy.array(params["projection"])
+        self.assertEqual(W.shape, (2, 1))
+        self.assertTrue(numpy.isfinite(W).all())
+        self.assertAlmostEqual(float(numpy.linalg.norm(W[:, 0])), 1.0)
+        for row in rows:
+            proj = numpy.array(row["feature"]) @ W
+            best = min(params["means"], key=lambda e: numpy.linalg.norm(proj - params["means"][e]))
+            self.assertEqual(best, row["entry_id"])
+
     def test_projection_separates_classes(self):
         rows = sample_rows()
         params = train_numprint.fit_lda(4, rows)

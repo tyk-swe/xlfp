@@ -138,21 +138,27 @@ func (b *Bank) Enroll(batch *Batch) (int, error) {
 			break
 		}
 	}
+	existing := map[string]bool{}
+	if idx >= 0 {
+		if b.Entries[idx].Family != batch.Family || b.Entries[idx].Model != batch.Model {
+			return 0, fmt.Errorf("enroll: entry %s already exists as family %q model %q, batch says %q/%q", batch.EntryID, b.Entries[idx].Family, b.Entries[idx].Model, batch.Family, batch.Model)
+		}
+		for _, s := range b.Entries[idx].Samples {
+			existing[s.ID] = true
+		}
+	}
+	for _, s := range batch.Samples {
+		if existing[s.ID] {
+			return 0, fmt.Errorf("enroll: sample id %q already enrolled in entry %s", s.ID, batch.EntryID)
+		}
+	}
+	changed := idx < 0 || len(batch.Samples) > 0
 	if idx < 0 {
 		b.Entries = append(b.Entries, Entry{ID: batch.EntryID, Family: batch.Family, Display: display, Model: batch.Model})
 		idx = len(b.Entries) - 1
-	} else if b.Entries[idx].Family != batch.Family || b.Entries[idx].Model != batch.Model {
-		return 0, fmt.Errorf("enroll: entry %s already exists as family %q model %q, batch says %q/%q", batch.EntryID, b.Entries[idx].Family, b.Entries[idx].Model, batch.Family, batch.Model)
-	}
-	existing := map[string]bool{}
-	for _, s := range b.Entries[idx].Samples {
-		existing[s.ID] = true
 	}
 	added := 0
 	for _, s := range batch.Samples {
-		if existing[s.ID] {
-			return added, fmt.Errorf("enroll: sample id %q already enrolled in entry %s", s.ID, batch.EntryID)
-		}
 		seq := s.Sequence
 		if seq == nil {
 			seq = ParseSequence(s.Text)
@@ -162,6 +168,11 @@ func (b *Bank) Enroll(batch *Batch) (int, error) {
 			Sequence: seq, CollectedAt: batch.CollectedAt, EndpointHost: batch.EndpointHost,
 		})
 		added++
+	}
+	if changed {
+		// All fitted parameters, including imported LDA means, describe
+		// the previous bank. Retraining is required after enrollment.
+		b.Params = Params{}
 	}
 	return added, b.Validate()
 }

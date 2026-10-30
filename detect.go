@@ -420,6 +420,9 @@ func cmdSample(args []string, stdout, stderr io.Writer) int {
 			if existing.EntryID != batch.EntryID || existing.Model != batch.Model || existing.Family != batch.Family {
 				return fail(stderr, fmt.Errorf("--resume: existing batch is for %s/%s (%s), flags say %s/%s (%s)", existing.EntryID, existing.Model, existing.Family, batch.EntryID, batch.Model, batch.Family))
 			}
+			if !strings.EqualFold(existing.EndpointHost, batch.EndpointHost) {
+				return fail(stderr, fmt.Errorf("--resume: existing batch endpoint host is %q, flags say %q", existing.EndpointHost, batch.EndpointHost))
+			}
 			batch = existing
 			for _, s := range batch.Samples {
 				doneIDs[s.ID] = true
@@ -468,7 +471,13 @@ func cmdSample(args []string, stdout, stderr io.Writer) int {
 			return fail(stderr, err)
 		}
 	}
-	fmt.Fprintf(stdout, "Batch %s: %d samples, %d failures recorded in %s\n", batch.EntryID, len(batch.Samples), len(batch.Failures), *outPath)
+	if cf.jsonOut {
+		if err := writeJSON(stdout, batch); err != nil {
+			return fail(stderr, err)
+		}
+	} else {
+		fmt.Fprintf(stdout, "Batch %s: %d samples, %d failures recorded in %s\n", batch.EntryID, len(batch.Samples), len(batch.Failures), *outPath)
+	}
 	if len(batch.Samples) == 0 {
 		return exitError
 	}

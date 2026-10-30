@@ -53,9 +53,13 @@ func ParseSequence(text string) []int {
 	return best
 }
 
-// CountIntegers counts integers in text the way ParseSequence's
-// longest run would see them (used for streaming early-stop).
-func CountIntegers(text string) int { return len(ParseSequence(text)) }
+// CountIntegers counts complete integers in ParseSequence's longest
+// run for streaming early-stop. Trailing digits may continue in the
+// next delta, so they count only once a delimiter arrives. Naturally
+// completed replies use ParseSequence directly and keep the last value.
+func CountIntegers(text string) int {
+	return len(ParseSequence(strings.TrimRight(text, "0123456789")))
+}
 
 // SequenceStats summarizes one parsed sequence for the reply check.
 type SequenceStats struct {

@@ -47,7 +47,9 @@ def fit_lda(dims, rows, max_axes=16, ridge=1e-3):
         sw += centered.T @ centered
         d = (m - overall).reshape(-1, 1)
         sb += len(Xi) * (d @ d.T)
-    sw += ridge * np.eye(dims) * (np.trace(sw) / dims if dims else 1.0)
+    # A positive floor also covers deterministic samples with zero scatter.
+    scale = np.trace(sw) / dims if dims else 1.0
+    sw += max(ridge * scale, 1e-12) * np.eye(dims)
     # Solve the generalized eigenproblem Sb v = lambda Sw v via
     # whitening with the Cholesky factor of Sw.
     L = np.linalg.cholesky(sw)

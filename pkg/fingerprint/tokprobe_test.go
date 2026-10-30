@@ -156,6 +156,29 @@ func TestTokRankSharedTokenizerInconclusive(t *testing.T) {
 	}
 }
 
+func TestTokRankRelatedAmbiguity(t *testing.T) {
+	db, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs := tokObsForEntry(t, db, "qwen25", func(_, v int) int { return v + 4 })
+	for _, reversed := range []bool{false, true} {
+		if reversed {
+			for i, j := 0, len(db.Entries)-1; i < j; i, j = i+1, j-1 {
+				db.Entries[i], db.Entries[j] = db.Entries[j], db.Entries[i]
+			}
+		}
+		res := db.TokRank(obs, "", TokParams{})
+		if res.Verdict != TokVerdictInconclusive || res.ReasonCode != TokReasonAmbiguous || res.TopEntryID != "" || res.TopFamily != "" || res.Probability != 0 {
+			t.Fatalf("tied related evidence (reversed=%v): %+v", reversed, res)
+		}
+	}
+	unique := db.TokRank(tokObsForEntry(t, db, "deepseek-v3", func(_, v int) int { return v + 4 }), "", TokParams{})
+	if unique.Verdict != TokVerdictRelated || unique.TopEntryID == "" {
+		t.Fatalf("unique related evidence: %+v", unique)
+	}
+}
+
 func TestTokRankUnverifiedNeverVerdictOrClaim(t *testing.T) {
 	db, err := Load()
 	if err != nil {
