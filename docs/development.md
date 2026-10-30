@@ -78,6 +78,11 @@ xlfp retrain --bank numprint-bank.json --export-features features.json
 xlfp retrain --bank numprint-bank.json --lda lda.json
 ```
 
+With imported LDA parameters, the leave-one-out report evaluates only
+centroid/kNN scorers. The LDA projection and class means include all
+exported samples, so they cannot be used to validate held-out samples.
+LDA rankings remain available, with confidence marked uncalibrated.
+
 Use the bank with `xlfp numbers --bank numprint-bank.json`. Repeat
 per model. Never import reference data collected by other projects;
 see [clean-room.md](./clean-room.md).

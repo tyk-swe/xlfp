@@ -40,7 +40,8 @@ type ChatResult struct {
 	HasUsage     bool
 	HTTPStatus   int
 	Truncated    bool // stopped early via StopWhen
-	Completed    bool // stream reached its terminal event / full body read
+	Terminated   bool // stream reached its terminal event / full body read
+	Completed    bool // model finished naturally, without a token limit or failure
 	FinishReason string
 	Error        string
 }
@@ -100,6 +101,7 @@ func (c *Client) Chat(ctx context.Context, r ChatRequest) (ChatResult, error) {
 		res.Error = "response exceeded size limit"
 		return res, nil
 	}
+	res.Terminated = true
 	raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
 	if msg, isErr := topLevelError(raw); isErr {
 		res.Error = "endpoint error in 200 response: " + snippet([]byte(redactErrorText(msg, c.Spec.APIKey)))
@@ -107,7 +109,7 @@ func (c *Client) Chat(ctx context.Context, r ChatRequest) (ChatResult, error) {
 	}
 	res.Text = extractChatText(c.Spec.Transport, raw)
 	res.FinishReason = extractFinishReason(c.Spec.Transport, raw)
-	res.Completed = res.FinishReason != "length" && res.FinishReason != "max_tokens"
+	res.Completed = naturalChatCompletion(c.Spec.Transport, res.FinishReason)
 	if n, ok := parseUsage(c.Spec.Transport, raw); ok && n > 0 {
 		res.PromptTokens, res.HasUsage = n, true
 	}
@@ -345,31 +347,54 @@ func extractFinishReason(transport string, raw []byte) string {
 	return ""
 }
 
+func naturalChatCompletion(transport, reason string) bool {
+	switch transport {
+	case config.TransportAnthropic:
+		return reason == "end_turn" || reason == "stop_sequence"
+	case config.TransportGemini:
+		return reason == "STOP"
+	case config.TransportResponses:
+		return reason == "completed"
+	default:
+		return reason == "stop"
+	}
+}
+
 // readChatStream consumes an SSE body until the transport's terminal
 // event, EOF, StopWhen, or the text cap. A later event reporting a
 // null/zero usage never replaces a count already read.
 func (c *Client) readChatStream(ctx context.Context, body io.Reader, r ChatRequest, res ChatResult) (ChatResult, error) {
-	br := bufio.NewReaderSize(body, 32<<10)
+	// Bound raw reads before ReadString can allocate a complete line.
+	// Comments and metadata count toward the same limit as JSON data.
+	br := bufio.NewReaderSize(io.LimitReader(body, maxResponseBytes+1), 32<<10)
 	var text strings.Builder
+	rawBytes := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			res.Text = text.String()
 			return res, err
 		}
 		line, err := br.ReadString('\n')
+		rawBytes += len(line)
+		if rawBytes > maxResponseBytes {
+			res.Error = "streamed response exceeded size limit"
+			break
+		}
 		line = strings.TrimRight(line, "\r\n")
 		if strings.HasPrefix(line, "data:") {
 			payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			if payload == "[DONE]" {
-				res.Completed = true
+				res.Terminated = true
 				break
 			}
 			if payload != "" {
-				if c.consumeStreamChunk([]byte(payload), &text, &res) {
-					break
-				}
+				terminal := c.consumeStreamChunk([]byte(payload), &text, &res)
 				if text.Len() > maxChatTextBytes {
 					res.Error = "streamed reply exceeded size limit"
+					break
+				}
+				if terminal {
+					res.Terminated = true
 					break
 				}
 				if r.StopWhen != nil && r.StopWhen(text.String()) {
@@ -387,12 +412,27 @@ func (c *Client) readChatStream(ctx context.Context, body io.Reader, r ChatReque
 		}
 	}
 	res.Text = text.String()
+	res.Completed = res.Terminated && res.Error == "" && !res.Truncated && naturalChatCompletion(c.Spec.Transport, res.FinishReason)
 	return res, nil
 }
 
 // consumeStreamChunk folds one SSE data payload into the result and
 // reports whether it was the terminal event.
 func (c *Client) consumeStreamChunk(raw []byte, text *strings.Builder, res *ChatResult) (terminal bool) {
+	if msg, isErr := topLevelError(raw); isErr {
+		res.Error = "endpoint error in stream: " + snippet([]byte(redactErrorText(msg, c.Spec.APIKey)))
+		res.FinishReason = "failed"
+		return true
+	}
+	var event struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(raw, &event) == nil && event.Type == "error" {
+		res.Error = "endpoint error in stream: " + snippet([]byte(redactErrorText(event.Message, c.Spec.APIKey)))
+		res.FinishReason = "failed"
+		return true
+	}
 	switch c.Spec.Transport {
 	case config.TransportAnthropic:
 		var v struct {
@@ -429,7 +469,6 @@ func (c *Client) consumeStreamChunk(raw []byte, text *strings.Builder, res *Chat
 				}
 			}
 		case "message_stop":
-			res.Completed = true
 			return true
 		}
 		return false
@@ -440,7 +479,6 @@ func (c *Client) consumeStreamChunk(raw []byte, text *strings.Builder, res *Chat
 		}
 		if fr := extractFinishReason(c.Spec.Transport, raw); fr != "" {
 			res.FinishReason = fr
-			res.Completed = true
 			return true
 		}
 		return false
@@ -462,8 +500,14 @@ func (c *Client) consumeStreamChunk(raw []byte, text *strings.Builder, res *Chat
 					res.PromptTokens, res.HasUsage = n, true
 				}
 			}
-			res.Completed = v.Type == "response.completed"
 			res.FinishReason = strings.TrimPrefix(v.Type, "response.")
+			if v.Type == "response.failed" {
+				msg, ok := topLevelError(v.Response)
+				if !ok {
+					msg = "response.failed"
+				}
+				res.Error = "endpoint error in stream: " + snippet([]byte(redactErrorText(msg, c.Spec.APIKey)))
+			}
 			return true
 		}
 		return false

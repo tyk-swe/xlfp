@@ -124,6 +124,63 @@ func TestTokRankInsufficient(t *testing.T) {
 	}
 }
 
+func TestTokRankInsufficientClaimUnchecked(t *testing.T) {
+	db, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := tokObsForEntry(t, db, "deepseek-v3", nil)
+	for n := 0; n < MinTokProbes; n++ {
+		res := db.TokRank(all[:n], "gpt-4o", TokParams{})
+		if res.Claim == nil || res.Claim.Status != "unchecked" {
+			t.Fatalf("%d observations: claim = %+v", n, res.Claim)
+		}
+	}
+}
+
+func TestTokRankSharedTokenizerInconclusive(t *testing.T) {
+	db, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"qwen25", "mimo-7b", "kimi-dev"} {
+		t.Run(id, func(t *testing.T) {
+			res := db.TokRank(tokObsForEntry(t, db, id, nil), "", TokParams{})
+			if res.Verdict != TokVerdictInconclusive || res.ReasonCode != TokReasonAmbiguous || res.UnlistedProb >= 0.5 {
+				t.Fatalf("shared tokenizer result = %+v", res)
+			}
+			if len(res.Candidates) < 3 || res.TopEntryID != "" {
+				t.Fatalf("shared tokenizer ambiguity lost: %+v", res)
+			}
+		})
+	}
+}
+
+func TestTokRankUnverifiedNeverVerdictOrClaim(t *testing.T) {
+	db, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ id, model string }{
+		{"google-gemma-sp", "gemini-2.5-pro"},
+		{"claude-xenova", "claude-sonnet-4"},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			res := db.TokRank(tokObsForEntry(t, db, tc.id, nil), tc.model, TokParams{})
+			if res.Verdict != TokVerdictInconclusive || res.ReasonCode != TokReasonUnverified || res.TopEntryID != "" {
+				t.Fatalf("unverified proxy verdict = %+v", res)
+			}
+			if res.Claim == nil || res.Claim.Status != "unchecked" {
+				t.Fatalf("unverified claim = %+v", res.Claim)
+			}
+			other := db.TokRank(tokObsForEntry(t, db, "deepseek-v3", nil), tc.model, TokParams{})
+			if other.Claim == nil || other.Claim.Status != "unchecked" {
+				t.Fatalf("unverified family checked against verified evidence: %+v", other.Claim)
+			}
+		})
+	}
+}
+
 func TestTokSelectBatchDeterministicAndOrdinary(t *testing.T) {
 	db, err := Load()
 	if err != nil {

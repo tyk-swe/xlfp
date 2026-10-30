@@ -14,6 +14,7 @@ type EvalReport struct {
 	PerEntry    map[string]float64 `json:"per_entry_accuracy"`
 	Temperature float64            `json:"temperature"`
 	SeqLimits   SeqLimits          `json:"seq_limits"`
+	LDAExcluded bool               `json:"lda_excluded,omitempty"` // accuracy covers centroid/kNN only; LDA confidence remains uncalibrated
 }
 
 // quantile returns the q-quantile (nearest-rank) of xs.
@@ -78,7 +79,7 @@ func fitSeqLimits(entries []Entry) SeqLimits {
 // scored as a single answer against the bank without itself.
 // Returns scores[sample] aligned with entries, plus the true entry
 // index per sample.
-func looScores(entries []Entry, lda *LDAParams) ([][]float64, []int) {
+func looScores(entries []Entry) ([][]float64, []int) {
 	allFeats := make([][][]float64, len(entries))
 	for i, e := range entries {
 		allFeats[i] = entryFeatures(e, -1)
@@ -99,7 +100,9 @@ func looScores(entries []Entry, lda *LDAParams) ([][]float64, []int) {
 				}
 			}
 			pa := parsedAnswer{seq: e.Samples[si].Sequence, feat: Featurize(e.Samples[si].Sequence), stats: Stats(e.Samples[si].Sequence)}
-			out = append(out, combinedScores(entries, feats, []parsedAnswer{pa}, lda))
+			// An imported LDA projection and its class means were fitted
+			// on the full bank, including this held-out sample and label.
+			out = append(out, combinedScores(entries, feats, []parsedAnswer{pa}, nil))
 			truth = append(truth, ei)
 		}
 	}
@@ -130,8 +133,9 @@ func fitTemperature(scores [][]float64, truth []int) float64 {
 
 // Retrain refits the detector parameters from the bank's own
 // samples: reply-check limits and the calibration temperature,
-// with a leave-one-out evaluation report. Every eligible entry
-// needs at least 3 samples.
+// with a leave-one-out evaluation report. Imported LDA models are
+// excluded from evaluation and remain uncalibrated. Every eligible
+// entry needs at least 3 samples.
 func Retrain(b *Bank) (EvalReport, error) {
 	entries := b.EligibleEntries()
 	if len(entries) < 2 {
@@ -143,11 +147,14 @@ func Retrain(b *Bank) (EvalReport, error) {
 		}
 	}
 	limits := fitSeqLimits(entries)
-	scores, truth := looScores(entries, b.Params.LDA)
-	temp := fitTemperature(scores, truth)
+	scores, truth := looScores(entries)
+	temp := 0.0
+	if b.Params.LDA == nil {
+		temp = fitTemperature(scores, truth)
+	}
 	rep := EvalReport{
 		Samples: len(scores), Temperature: temp, SeqLimits: limits,
-		PerEntry: map[string]float64{},
+		PerEntry: map[string]float64{}, LDAExcluded: b.Params.LDA != nil,
 	}
 	perTotal := map[string]int{}
 	perCorrect := map[string]int{}

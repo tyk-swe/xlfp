@@ -39,7 +39,11 @@ func TokProbe(w io.Writer, endpointLabel, model, transport string, r fingerprint
 		case "unclear":
 			fmt.Fprintf(w, "Claim check: not yet clear for model %q (%s family, %.0f%%).\n", r.Claim.Model, r.Claim.Family, r.Claim.Probability*100)
 		default:
-			fmt.Fprintf(w, "Claim check: model %q does not map to a known family, so it cannot be checked.\n", r.Claim.Model)
+			if r.Claim.Family == "" {
+				fmt.Fprintf(w, "Claim check: model %q does not map to a known family, so it cannot be checked.\n", r.Claim.Model)
+			} else {
+				fmt.Fprintf(w, "Claim check: model %q (%s family) cannot yet be checked with the available verified evidence.\n", r.Claim.Model, r.Claim.Family)
+			}
 		}
 	}
 	fmt.Fprintln(w, "\nA tokenizer match only shows which tokenizer counts the text; several models can share one, so this never proves an exact model version.")

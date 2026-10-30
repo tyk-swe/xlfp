@@ -81,7 +81,7 @@ type LDAParams struct {
 
 // Params holds fitted detector parameters. Temperature <= 0 means
 // confidence is uncalibrated: rankings are reported without
-// confidence values.
+// confidence values. Imported LDA models always remain uncalibrated.
 type Params struct {
 	SeqLimits   SeqLimits  `json:"seq_limits"`
 	Temperature float64    `json:"temperature,omitempty"`

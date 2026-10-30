@@ -195,6 +195,53 @@ func TestRetrainAndCalibratedScore(t *testing.T) {
 	}
 }
 
+func TestImportedLDARemainsUncalibrated(t *testing.T) {
+	b := synthBank(t, 4)
+	base, err := Retrain(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lda := &LDAParams{Projection: make([][]float64, featureDims), Means: map[string][]float64{}}
+	for i := range lda.Projection {
+		lda.Projection[i] = []float64{0}
+	}
+	lda.Projection[0][0] = 1
+	for _, e := range b.Entries {
+		lda.Means[e.ID] = projectLDA(lda, meanVec(entryFeatures(e, -1)))
+	}
+	b.Params.LDA = lda
+	r := rand.New(rand.NewSource(123))
+	var seqs [][]int
+	for i := 0; i < 3; i++ {
+		seqs = append(seqs, synthSeq(r, centersB, 300))
+	}
+	assertUncalibrated := func() {
+		t.Helper()
+		res := b.Score(answersFromSeqs(seqs), ScoreOptions{})
+		if res.Status != StatusRanked || res.Calibrated {
+			t.Fatalf("imported LDA result = %+v", res)
+		}
+		for _, candidate := range res.Candidates {
+			if candidate.Confidence != 0 {
+				t.Fatalf("uncalibrated LDA confidence = %+v", candidate)
+			}
+		}
+	}
+	// Even a pre-existing fitted temperature cannot calibrate an imported LDA.
+	assertUncalibrated()
+	rep, err := Retrain(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.LDAExcluded || rep.Temperature != 0 || b.Params.Temperature != 0 || b.Params.LDA != lda {
+		t.Fatalf("imported LDA calibration report = %+v", rep)
+	}
+	if rep.Accuracy != base.Accuracy || rep.Top1 != base.Top1 || rep.Samples != base.Samples {
+		t.Fatalf("LDA contaminated base-scorer evaluation: before=%+v after=%+v", base, rep)
+	}
+	assertUncalibrated()
+}
+
 func TestEnrollBatch(t *testing.T) {
 	r := rand.New(rand.NewSource(5))
 	seq := synthSeq(r, centersA, 300)

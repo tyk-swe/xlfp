@@ -583,6 +583,9 @@ func cmdRetrain(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	}
 	fmt.Fprintf(stdout, "Retrained %s: %d samples, leave-one-out accuracy %.1f%% (%d/%d), temperature %.2f\n", *bankPath, rep.Samples, rep.Accuracy*100, rep.Top1, rep.Samples, rep.Temperature)
+	if rep.LDAExcluded {
+		fmt.Fprintln(stdout, "Accuracy evaluates centroid/kNN only. Imported LDA is excluded from validation; its ranking confidence remains uncalibrated.")
+	}
 	fmt.Fprintf(stdout, "Reply-check limits: autocorrelation > %.3f and small-step share > %.3f mark a non-model reply (fitted: %v)\n", rep.SeqLimits.Autocorr, rep.SeqLimits.SmallStep, rep.SeqLimits.Fitted)
 	for id, acc := range rep.PerEntry {
 		fmt.Fprintf(stdout, "  %-24s %.1f%%\n", id, acc*100)

@@ -110,7 +110,13 @@ match. Probe texts are chosen adaptively in batches by a pairwise
 Bhattacharyya error bound, probing stops at 99% posterior or
 negligible expected gain, and a closing baseline that disagrees
 with the opening one marks the result inconclusive
-(`baseline_drift`). The result is also checked against `--model`:
+(`baseline_drift`). A failed closing baseline also forces inconclusive
+(`baseline_unvalidated`) and records the error. Split evidence across
+listed candidates, including shared tokenizers, yields inconclusive
+(`ambiguous_tokenizer`); unverified proxies remain display-only
+(`unverified_tokenizer`). The result is also checked against `--model`
+after at least four usable differential counts and successful baseline
+validation, when the claimed family has a verified reference:
 the probability mass on that model's family is reported as
 consistent (≥ 0.9), inconsistent (≤ 0.1), or unclear. Exit codes:
 0 for any verdict, 2 inconclusive, 1 operational error.
@@ -136,7 +142,10 @@ cosine, k-nearest-neighbour distance, and an optional LDA
 discriminant fitted offline. Confidence is a temperature-scaled
 softmax fitted by leave-one-out evaluation; with no fitted
 calibration or fewer than three valid answers the result is a
-ranking only. The ranking is **closed-set within the bank**: a
+ranking only. Imported LDA models also produce rankings without
+calibrated confidence; leave-one-out reports exclude the externally
+fitted LDA projection and evaluate centroid/kNN only.
+The ranking is **closed-set within the bank**: a
 model outside the bank still gets a closest candidate, and no
 result proves an exact model. `--rounds` repeats detection,
 `--strict` requires naturally completed answers, `--output` saves

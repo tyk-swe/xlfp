@@ -31,9 +31,12 @@ func WrapTokText(text string) string { return TokWrapperPrefix + text + TokWrapp
 
 // TokReason codes (machine-stable, mirroring the Rank reason codes).
 const (
-	TokReasonInsufficient  = "insufficient_counts"
-	TokReasonBaselineDrift = "baseline_drift"
-	TokReasonNoEntries     = "no_entries"
+	TokReasonInsufficient        = "insufficient_counts"
+	TokReasonBaselineDrift       = "baseline_drift"
+	TokReasonBaselineUnvalidated = "baseline_unvalidated"
+	TokReasonAmbiguous           = "ambiguous_tokenizer"
+	TokReasonUnverified          = "unverified_tokenizer"
+	TokReasonNoEntries           = "no_entries"
 )
 
 // TokVerdict values.
@@ -302,7 +305,7 @@ func (db *DB) TokRank(obs []TokObservation, model string, params TokParams) TokR
 	})
 	res.UnlistedProb = round6(unlisted)
 	if model != "" {
-		res.Claim = db.tokClaimCheck(post, model)
+		res.Claim = &TokClaim{Model: model, Family: db.FamilyForModel(model), Status: "unchecked"}
 	}
 	if len(at) < MinTokProbes {
 		res.ReasonCode = TokReasonInsufficient
@@ -312,18 +315,34 @@ func (db *DB) TokRank(obs []TokObservation, model string, params TokParams) TokR
 	switch {
 	case bestExact >= 0 && post.exact[bestExact] >= 0.5 && post.exact[bestExact] >= unlisted:
 		e := db.Entries[bestExact]
+		if !e.Verified {
+			res.ReasonCode = TokReasonUnverified
+			res.Reason = "closest tokenizer is an unverified proxy; it is a display-only candidate"
+			return res
+		}
 		res.Verdict, res.TopEntryID, res.TopFamily = TokVerdictExact, e.ID, e.Family
 		res.Probability = round6(post.exact[bestExact])
 	case bestRelated >= 0 && post.related[bestRelated] >= post.unrelated && post.related[bestRelated] > post.exact[bestExact]:
 		e := db.Entries[bestRelated]
+		if !e.Verified {
+			res.ReasonCode = TokReasonUnverified
+			res.Reason = "closest tokenizer is an unverified proxy; it is a display-only candidate"
+			return res
+		}
 		res.Verdict, res.TopEntryID, res.TopFamily = TokVerdictRelated, e.ID, e.Family
 		res.Probability = round6(post.related[bestRelated])
+	case unlisted < 0.5:
+		res.ReasonCode = TokReasonAmbiguous
+		res.Reason = "evidence favors listed tokenizers, but is split across multiple candidates, which may share a tokenizer"
 	default:
 		res.Verdict = TokVerdictUnknown
 		res.Probability = round6(unlisted)
 		if bestExact >= 0 {
 			res.TopEntryID, res.TopFamily = db.Entries[bestExact].ID, db.Entries[bestExact].Family
 		}
+	}
+	if model != "" {
+		res.Claim = db.tokClaimCheck(post, model)
 	}
 	return res
 }
@@ -335,18 +354,15 @@ func (db *DB) tokClaimCheck(post tokPosterior, model string) *TokClaim {
 		return claim
 	}
 	claim.Family = fam
+	if !db.IsVerified(fam) {
+		return claim
+	}
 	prob := 0.0
-	verified := db.IsVerified(fam)
 	for i, e := range db.Entries {
-		if e.Family != fam {
+		if e.Family != fam || !e.Verified {
 			continue
 		}
 		prob += post.exact[i]
-		if !verified {
-			// A family without a source-verified tokenizer can only
-			// be checked loosely: a close relative also counts.
-			prob += post.related[i]
-		}
 	}
 	claim.Probability = round6(prob)
 	switch {

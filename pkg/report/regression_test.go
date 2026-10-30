@@ -22,3 +22,18 @@ func TestPlainReportsDisclosePartialProbeFailure(t *testing.T) {
 		t.Fatal("default audit hides partial failure")
 	}
 }
+
+func TestTokProbeUncheckedKnownClaim(t *testing.T) {
+	var out bytes.Buffer
+	TokProbe(&out, "https://example.test", "gpt-4o", "openai", fingerprint.TokResult{
+		Verdict: fingerprint.TokVerdictInconclusive,
+		Reason:  "insufficient counts",
+		Claim:   &fingerprint.TokClaim{Model: "gpt-4o", Family: "openai", Status: "unchecked"},
+	}, false)
+	if strings.Contains(out.String(), "does not map to a known family") || strings.Contains(out.String(), "INCONSISTENT") {
+		t.Fatalf("unchecked known-family claim misrepresented: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "cannot yet be checked") {
+		t.Fatalf("missing unchecked claim explanation: %s", out.String())
+	}
+}

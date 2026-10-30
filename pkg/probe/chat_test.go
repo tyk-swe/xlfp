@@ -2,7 +2,9 @@ package probe
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/tyk-swe/xlfp/pkg/config"
 	"github.com/tyk-swe/xlfp/pkg/fingerprint"
+	"github.com/tyk-swe/xlfp/pkg/numprint"
 )
 
 func chatClient(t *testing.T, transport string, h http.HandlerFunc) *Client {
@@ -101,6 +104,17 @@ func TestChatResponsesNonStreamAndURL(t *testing.T) {
 		if !strings.HasSuffix(r.URL.Path, "/responses") {
 			t.Errorf("path = %s, want /responses", r.URL.Path)
 		}
+		var req struct {
+			MaxOutputTokens int `json:"max_output_tokens"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+		}
+		if req.MaxOutputTokens > 0 && req.MaxOutputTokens < 16 {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":{"message":"max_output_tokens must be at least 16"}}`)
+			return
+		}
 		fmt.Fprint(w, `{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"9 8"}]}],"usage":{"input_tokens":33}}`)
 	})
 	res, err := c.Chat(context.Background(), ChatRequest{User: "x", Effort: "low", ServiceTier: "flex"})
@@ -117,6 +131,110 @@ func TestChatResponsesNonStreamAndURL(t *testing.T) {
 	}
 	if !obs.HasUsage || obs.PromptTokens != 33 {
 		t.Fatalf("unexpected responses usage observation: %+v", obs)
+	}
+}
+
+func TestChatNaturalCompletion(t *testing.T) {
+	for _, tc := range []struct {
+		name, transport, body string
+		stream, completed     bool
+	}{
+		{"openai_length", config.TransportOpenAI, `{"choices":[{"message":{"content":"1 2"},"finish_reason":"length"}]}`, false, false},
+		{"openai_length_stream", config.TransportOpenAI, "data: {\"choices\":[{\"delta\":{\"content\":\"1 2\"},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n", true, false},
+		{"openai_unknown_stream", config.TransportOpenAI, "data: [DONE]\n\n", true, false},
+		{"openai_missing_terminal", config.TransportOpenAI, "data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n", true, false},
+		{"anthropic_max_tokens", config.TransportAnthropic, `{"content":[{"type":"text","text":"1 2"}],"stop_reason":"max_tokens"}`, false, false},
+		{"anthropic_max_tokens_stream", config.TransportAnthropic, "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n", true, false},
+		{"responses_incomplete", config.TransportResponses, `{"status":"incomplete","output_text":"1 2"}`, false, false},
+		{"responses_incomplete_stream", config.TransportResponses, "data: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\"}}\n\n", true, false},
+		{"responses_completed_stream", config.TransportResponses, "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n", true, true},
+		{"gemini_max_tokens", config.TransportGemini, `{"candidates":[{"finishReason":"MAX_TOKENS"}]}`, false, false},
+		{"gemini_max_tokens_stream", config.TransportGemini, "data: {\"candidates\":[{\"finishReason\":\"MAX_TOKENS\"}]}\n\n", true, false},
+		{"gemini_stop_stream", config.TransportGemini, "data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := chatClient(t, tc.transport, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, tc.body) })
+			res, err := c.Chat(context.Background(), ChatRequest{User: "x", Stream: tc.stream})
+			if err != nil || res.Error != "" || res.Completed != tc.completed {
+				t.Fatalf("Chat = %+v, %v; want completed=%v", res, err, tc.completed)
+			}
+			if tc.name != "openai_missing_terminal" && !res.Terminated {
+				t.Fatalf("transport termination lost: %+v", res)
+			}
+		})
+	}
+}
+
+func TestChatStreamProviderErrors(t *testing.T) {
+	for _, tc := range []struct{ name, transport, partial, failure string }{
+		{"responses_failed", config.TransportResponses, `{"type":"response.output_text.delta","delta":"1 2 3"}`, `{"type":"response.failed","response":{"error":{"message":"failure sk-test-secret"}}}`},
+		{"responses_failed_without_detail", config.TransportResponses, `{"type":"response.output_text.delta","delta":"1 2 3"}`, `{"type":"response.failed"}`},
+		{"responses_error", config.TransportResponses, `{"type":"response.output_text.delta","delta":"1 2 3"}`, `{"type":"error","message":"failure sk-test-secret"}`},
+		{"anthropic_error", config.TransportAnthropic, `{"type":"content_block_delta","delta":{"type":"text_delta","text":"1 2 3"}}`, `{"type":"error","error":{"type":"overloaded_error","message":"failure sk-test-secret"}}`},
+		{"openai_error", config.TransportOpenAI, `{"choices":[{"delta":{"content":"1 2 3"}}]}`, `{"error":{"message":"failure sk-test-secret"}}`},
+		{"gemini_error", config.TransportGemini, `{"candidates":[{"content":{"parts":[{"text":"1 2 3"}]}}]}`, `{"error":{"message":"failure sk-test-secret"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := chatClient(t, tc.transport, func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprintf(w, "data: %s\n\ndata: %s\n\n", tc.partial, tc.failure)
+			})
+			c.Spec.APIKey = "sk-test-secret"
+			res, err := c.Chat(context.Background(), ChatRequest{User: "x", Stream: true})
+			if err != nil || res.Error == "" || strings.Contains(res.Error, c.Spec.APIKey) || res.Completed || res.Text != "1 2 3" {
+				t.Fatalf("failed stream = %+v, %v", res, err)
+			}
+		})
+	}
+}
+
+func TestChatStreamRawLimit(t *testing.T) {
+	for _, body := range []string{
+		":" + strings.Repeat("x", 5<<20),
+		strings.Repeat(":"+strings.Repeat("x", 1022)+"\n", 5120),
+	} {
+		c := &Client{Spec: config.EndpointSpec{Transport: config.TransportOpenAI}}
+		reader := &io.LimitedReader{R: strings.NewReader(body), N: int64(len(body))}
+		res, err := c.readChatStream(context.Background(), reader, ChatRequest{}, ChatResult{})
+		if err != nil || res.Error == "" || res.Completed {
+			t.Fatalf("oversized stream = %+v, %v", res, err)
+		}
+		if consumed := int64(len(body)) - reader.N; consumed > maxResponseBytes+1 {
+			t.Fatalf("read %d raw bytes, limit is %d", consumed, maxResponseBytes+1)
+		}
+	}
+}
+
+func TestRunNumbersRejectsLimitedAndFailedStreams(t *testing.T) {
+	sequence := strings.TrimSpace(strings.Repeat("37 173 ", 150))
+	seq := numprint.ParseSequence(sequence)
+	bank := &numprint.Bank{Version: "test", Entries: []numprint.Entry{
+		{ID: "a", Samples: []numprint.Sample{{Sequence: seq}}},
+		{ID: "b", Samples: []numprint.Sample{{Sequence: seq}}},
+	}}
+	for _, strict := range []bool{false, true} {
+		c := chatClient(t, config.TransportOpenAI, func(w http.ResponseWriter, r *http.Request) {
+			text := sequence
+			if !strict {
+				// Enough integers for MinValid, fewer than relaxed early stop.
+				text = strings.TrimSpace(strings.Repeat("37 173 ", 90))
+			}
+			chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"content": text}}}})
+			fmt.Fprintf(w, "data: %s\n\n", chunk)
+			if strict {
+				fmt.Fprint(w, "data: {\"choices\":[{\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n")
+			} else {
+				fmt.Fprint(w, "data: {\"error\":{\"message\":\"provider failed\"}}\n\n")
+			}
+		})
+		result := RunNumbers(context.Background(), c, bank, NumOptions{Count: 1, Stream: true, Strict: strict,
+			Challenges: []numprint.Challenge{{ID: "test", ExpectedCount: 300, Prompt: "numbers"}},
+		})
+		if result.Rounds[0].Result.ValidAnswers != 0 || result.Rounds[0].Answers[0].Completed {
+			t.Fatalf("strict=%v accepted invalid stream: %+v", strict, result)
+		}
+		if !strict && result.Rounds[0].Answers[0].Error == "" {
+			t.Fatalf("failed sample lost error: %+v", result)
+		}
 	}
 }
 

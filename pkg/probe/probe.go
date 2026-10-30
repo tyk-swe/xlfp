@@ -521,7 +521,7 @@ func (c *Client) requestBody(text string, altShape bool) ([]byte, error) {
 		})
 	case config.TransportResponses:
 		return json.Marshal(map[string]any{
-			"model": c.Spec.Model, "input": text, "max_output_tokens": 1,
+			"model": c.Spec.Model, "input": text, "max_output_tokens": 16,
 		})
 	default:
 		body := map[string]any{
