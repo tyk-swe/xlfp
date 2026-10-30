@@ -136,6 +136,46 @@ func TestEvidenceLengthPolicy(t *testing.T) {
 	}
 }
 
+func TestRetrainUsesInferenceTieBreak(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		b := synthBank(t, 6)
+		b.Entries[0].ID, b.Entries[1].ID = "z", "a"
+		b.Entries[0].Samples = b.Entries[0].Samples[:3]
+		seq := synthSeq(rand.New(rand.NewSource(29)), centersA, 300)
+		for ei := range b.Entries {
+			for si := range b.Entries[ei].Samples {
+				b.Entries[ei].Samples[si].Sequence = seq
+			}
+		}
+		if reverse {
+			b.Entries[0], b.Entries[1] = b.Entries[1], b.Entries[0]
+		}
+		rep, err := Retrain(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		correct := 0
+		for ei, e := range b.Entries {
+			for si, sample := range e.Samples {
+				heldOut := *b
+				heldOut.Params.SeqLimits = SeqLimits{Autocorr: 1, SmallStep: 1, Fitted: true}
+				heldOut.Entries = append([]Entry(nil), b.Entries...)
+				heldOut.Entries[ei].Samples = append(append([]Sample(nil), e.Samples[:si]...), e.Samples[si+1:]...)
+				res := heldOut.Score(answersFromSeqs([][]int{sample.Sequence}), ScoreOptions{})
+				if res.Status != StatusRanked || res.TopEntryID != "a" {
+					t.Fatalf("unexpected tied inference: %+v", res)
+				}
+				if res.TopEntryID == e.ID {
+					correct++
+				}
+			}
+		}
+		if rep.Top1 != correct || rep.Accuracy != round4(float64(correct)/9) || rep.PerEntry["a"] != 1 || rep.PerEntry["z"] != 0 {
+			t.Fatalf("evaluation differs from held-out inference (reverse=%v): %+v, actual correct=%d", reverse, rep, correct)
+		}
+	}
+}
+
 func TestGenerateChallenges(t *testing.T) {
 	r := rand.New(rand.NewSource(7))
 	chs := GenerateChallenges(r, 3)

@@ -250,3 +250,30 @@ func TestTokSelectBatchDeterministicAndOrdinary(t *testing.T) {
 		}
 	}
 }
+
+func TestTokRankRejectsDegenerateDifferentials(t *testing.T) {
+	db, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		diff func(int, int) int
+	}{
+		{"zero", func(_, _ int) int { return 0 }},
+		{"positive_constant", func(_, _ int) int { return 7 }},
+		{"negative_constant", func(_, _ int) int { return -1 }},
+		{"varying_nonpositive", func(i, _ int) int { return -i }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			obs := tokObsForEntry(t, db, "deepseek-v3", tc.diff)
+			res := db.TokRank(obs, "gpt-4o", TokParams{})
+			if res.Verdict != TokVerdictInconclusive || res.ReasonCode != TokReasonUnreliableCounts || res.Probability != 0 || res.TopEntryID != "" {
+				t.Fatalf("verdict=%s reason=%s probability=%v top=%s", res.Verdict, res.ReasonCode, res.Probability, res.TopEntryID)
+			}
+			if res.Claim == nil || res.Claim.Status != "unchecked" || res.Claim.Probability != 0 {
+				t.Fatalf("claim = %+v", res.Claim)
+			}
+		})
+	}
+}

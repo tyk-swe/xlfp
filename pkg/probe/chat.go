@@ -301,7 +301,8 @@ func geminiText(raw []byte) string {
 		Candidates []struct {
 			Content struct {
 				Parts []struct {
-					Text string `json:"text"`
+					Text    string `json:"text"`
+					Thought bool   `json:"thought"`
 				} `json:"parts"`
 			} `json:"content"`
 		} `json:"candidates"`
@@ -311,7 +312,9 @@ func geminiText(raw []byte) string {
 	}
 	var sb strings.Builder
 	for _, p := range v.Candidates[0].Content.Parts {
-		sb.WriteString(p.Text)
+		if !p.Thought {
+			sb.WriteString(p.Text)
+		}
 	}
 	return sb.String()
 }

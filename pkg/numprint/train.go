@@ -196,7 +196,7 @@ func Retrain(b *Bank) (EvalReport, error) {
 	for i, s := range scores {
 		top := 0
 		for j := range s {
-			if s[j] > s[top] {
+			if s[j] > s[top] || s[j] == s[top] && entries[j].ID < entries[top].ID {
 				top = j
 			}
 		}

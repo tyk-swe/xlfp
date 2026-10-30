@@ -322,6 +322,16 @@ func (db *DB) TokRank(obs []TokObservation, model string, params TokParams) TokR
 		res.Reason = fmt.Sprintf("only %d usable differential counts; at least %d are required", len(at), MinTokProbes)
 		return res
 	}
+	minDiff, maxDiff := at[0].diff, at[0].diff
+	for _, o := range at[1:] {
+		minDiff, maxDiff = min(minDiff, o.diff), max(maxDiff, o.diff)
+	}
+	// Stable baselines cannot validate usage that ignores probe content.
+	if minDiff == maxDiff || maxDiff <= 0 {
+		res.ReasonCode = TokReasonUnreliableCounts
+		res.Reason = "differential counts are constant or entirely non-positive; prompt-token usage is not trustworthy"
+		return res
+	}
 	if !post.informative {
 		res.ReasonCode = TokReasonUnreliableCounts
 		res.Reason = "differential counts do not distinguish the tokenizer hypotheses"

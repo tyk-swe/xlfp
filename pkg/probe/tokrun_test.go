@@ -222,3 +222,20 @@ func TestTokenizerProbeBaselineOnlyClaimUnchecked(t *testing.T) {
 		t.Fatalf("baseline-only result = %+v, %v", res, err)
 	}
 }
+
+func TestTokenizerProbeConstantUsageInconclusive(t *testing.T) {
+	db, err := fingerprint.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := chatClient(t, config.TransportOpenAI, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"usage":{"prompt_tokens":123}}`)
+	})
+	res, err := TokenizerProbe(context.Background(), c, db, "gpt-4o", TokOptions{MaxRequests: 6})
+	if err != nil || res.RequestsSpent != 6 || res.BaselineDrift || res.Verdict != fingerprint.TokVerdictInconclusive || res.ReasonCode != fingerprint.TokReasonUnreliableCounts {
+		t.Fatalf("constant usage: verdict=%s reason=%s requests=%d drift=%v err=%v", res.Verdict, res.ReasonCode, res.RequestsSpent, res.BaselineDrift, err)
+	}
+	if res.Claim == nil || res.Claim.Status != "unchecked" {
+		t.Fatalf("constant usage claim = %+v", res.Claim)
+	}
+}

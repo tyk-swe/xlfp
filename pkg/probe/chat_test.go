@@ -46,6 +46,34 @@ func TestChatOpenAINonStream(t *testing.T) {
 	}
 }
 
+func TestChatGeminiSkipsThoughtParts(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprint(stream), func(t *testing.T) {
+			thought := `{"thought":true,"text":"10 20 30 40 "}`
+			answer := `{"thought":false,"text":"173 "},{"text":"286 355"}`
+			c := chatClient(t, config.TransportGemini, func(w http.ResponseWriter, r *http.Request) {
+				if stream {
+					fmt.Fprintf(w, "data: {\"candidates\":[{\"content\":{\"parts\":[%s]}}]}\n\n", thought)
+				} else {
+					answer = thought + "," + answer
+				}
+				raw := fmt.Sprintf(`{"candidates":[{"content":{"parts":[%s]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":17}}`, answer)
+				if stream {
+					fmt.Fprintf(w, "data: %s\n\n", raw)
+				} else {
+					fmt.Fprint(w, raw)
+				}
+			})
+			res, err := c.Chat(context.Background(), ChatRequest{User: "numbers", Stream: stream,
+				StopWhen: func(text string) bool { return numprint.CountIntegers(text) >= 3 },
+			})
+			if err != nil || res.Error != "" || res.Text != "173 286 355" || res.Truncated || !res.Completed || res.PromptTokens != 17 {
+				t.Fatalf("thought text contaminated captured reply: %+v, %v", res, err)
+			}
+		})
+	}
+}
+
 func TestChatOpenAIStreamEarlyStop(t *testing.T) {
 	c := chatClient(t, config.TransportOpenAI, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
