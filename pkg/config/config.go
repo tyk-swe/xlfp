@@ -20,7 +20,7 @@ import (
 type Profile struct {
 	Endpoint  string `json:"endpoint,omitempty"`
 	Model     string `json:"model,omitempty"`
-	Transport string `json:"transport,omitempty"` // openai | anthropic | gemini
+	Transport string `json:"transport,omitempty"` // openai | anthropic | gemini | responses
 	APIKey    string `json:"api_key,omitempty"`
 	APIKeyEnv string `json:"api_key_env,omitempty"`
 }
@@ -39,6 +39,7 @@ const (
 	TransportOpenAI    = "openai"
 	TransportAnthropic = "anthropic"
 	TransportGemini    = "gemini"
+	TransportResponses = "responses"
 )
 
 // DefaultPath returns the config path that would be used without a flag:
@@ -332,6 +333,8 @@ func NormalizeTransport(t string) string {
 		return TransportAnthropic
 	case "gemini", "google":
 		return TransportGemini
+	case "responses", "response", "openai-responses":
+		return TransportResponses
 	default:
 		return strings.ToLower(strings.TrimSpace(t))
 	}
@@ -343,6 +346,7 @@ var officialDomains = map[string][]string{
 	TransportOpenAI:    {"api.openai.com"},
 	TransportAnthropic: {"api.anthropic.com"},
 	TransportGemini:    {"generativelanguage.googleapis.com"},
+	TransportResponses: {"api.openai.com"},
 }
 
 func hostMatches(host string, domains []string) bool {
@@ -391,7 +395,7 @@ func DetectTransport(endpoint string) string {
 
 // ValidTransport reports whether t is a supported transport.
 func ValidTransport(t string) bool {
-	return t == TransportOpenAI || t == TransportAnthropic || t == TransportGemini
+	return t == TransportOpenAI || t == TransportAnthropic || t == TransportGemini || t == TransportResponses
 }
 
 func firstNonEmpty(vals ...string) string {

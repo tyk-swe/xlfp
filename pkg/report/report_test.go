@@ -94,6 +94,40 @@ func TestUncoverPlainInconclusive(t *testing.T) {
 	}
 }
 
+func TestSharedTokenizerExplanationNamesEveryFamily(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		shared     []string
+		wantLabels []string
+	}{
+		{"two families", []string{"kimi"}, []string{"MiMo", "Kimi"}},
+		{"three families", []string{"kimi", "qwen"}, []string{"MiMo", "Kimi", "Qwen"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			res := fingerprint.Result{
+				Status: fingerprint.StatusInconclusive, ReasonCode: fingerprint.ReasonSharedTokenizer,
+				Rankings: []fingerprint.FamilyRank{{Family: "mimo", Display: "MiMo", SharedWith: c.shared}},
+			}
+			var buf bytes.Buffer
+			Uncover(&buf, "https://example.com", "m", "openai", res, false)
+			var explanation string
+			for _, line := range strings.Split(buf.String(), "\n") {
+				if strings.HasPrefix(line, "Why: ") {
+					explanation = line
+				}
+			}
+			for _, label := range c.wantLabels {
+				if !strings.Contains(explanation, label) {
+					t.Errorf("explanation %q omits %s", explanation, label)
+				}
+			}
+			if strings.Contains(buf.String(), "these two") {
+				t.Errorf("explanation assumes a two-family tie: %q", buf.String())
+			}
+		})
+	}
+}
+
 func TestAuditPlainMismatch(t *testing.T) {
 	target := identifiedResult()
 	target.TopFamily = "qwen"

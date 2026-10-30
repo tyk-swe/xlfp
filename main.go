@@ -47,6 +47,11 @@ Usage:
   xlfp uncover --endpoint URL --model NAME [flags]
   xlfp opencode --model opencode/MODEL [flags]
   xlfp audit --target-url URL --model NAME [--claim FAMILY] [--official-url URL] [flags]
+  xlfp tokprobe --endpoint URL --model NAME [flags]
+  xlfp numbers --endpoint URL --model NAME [flags]   (or --input FILE offline)
+  xlfp sample --endpoint URL --model NAME --family F --out batch.json
+  xlfp enroll batch.json [--bank numprint-bank.json]
+  xlfp retrain [--bank numprint-bank.json]
   xlfp families [--json]
   xlfp explain
   xlfp version
@@ -108,13 +113,13 @@ const explainText = `xlfp in plain words
 
 What it does
   Every AI model splits text into chunks called tokens before reading
-  it, and each model family (DeepSeek, Qwen, OpenAI, ...) splits text
-  differently. xlfp sends a few tiny messages to an endpoint, looks at
-  how many tokens the endpoint says each one was, and matches that
-  pattern against the families it knows.
+  it. Different tokenizers split text in different ways, although models
+  in different families can share one. xlfp sends a few tiny messages to
+  an endpoint, looks at how many tokens the endpoint says each one was,
+  and matches that pattern against the families it knows.
 
 Words you will see
-  family        A group of models sharing one text-splitter (tokenizer).
+  family        A group of related models, which may use different tokenizers.
   IDENTIFIED    The counts match one family strongly.
   INCONCLUSIVE  Not enough trustworthy evidence to say. This is a normal,
                 honest outcome — xlfp would rather say "can't tell" than guess.
@@ -125,7 +130,7 @@ Words you will see
 What xlfp cannot do
   - Prove an exact model version or checkpoint. Families only.
   - Detect a secretly smaller/weaker model of the same family.
-  - Separate Qwen from MiMo: they ship the identical tokenizer.
+  - Separate Qwen2.5, MiMo-7B, and Kimi-Dev: they share a tokenizer.
   - Give verdicts for Google/Claude yet: their tokenizers are not
     public, so they appear as scored hints, never verdicts.
   - Authenticate the token-count numbers a provider reports.
@@ -223,6 +228,16 @@ func run(args []string, stdout, stderr io.Writer) (code int) {
 		return cmdOpenCode(args[1:], stdout, stderr)
 	case "audit":
 		return cmdAudit(args[1:], stdout, stderr)
+	case "tokprobe":
+		return cmdTokprobe(args[1:], stdout, stderr)
+	case "numbers":
+		return cmdNumbers(args[1:], stdout, stderr)
+	case "sample":
+		return cmdSample(args[1:], stdout, stderr)
+	case "enroll":
+		return cmdEnroll(args[1:], stdout, stderr)
+	case "retrain":
+		return cmdRetrain(args[1:], stdout, stderr)
 	case "families":
 		return cmdFamilies(args[1:], stdout, stderr)
 	case "explain":
@@ -342,7 +357,7 @@ func cmdUncover(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&ef.endpoint, "endpoint", "", "endpoint base URL (host, /v1 base, or full request URL)")
 	fs.StringVar(&ef.endpoint, "url", "", "alias for --endpoint")
 	fs.StringVar(&ef.model, "model", "", "model name to probe")
-	fs.StringVar(&ef.transport, "transport", "", "openai | anthropic | gemini (default: auto-detect from URL)")
+	fs.StringVar(&ef.transport, "transport", "", "openai | anthropic | gemini | responses (default: auto-detect from URL)")
 	fs.StringVar(&ef.profile, "profile", "", "config profile name")
 	fs.StringVar(&ef.apiKeyEnv, "api-key-env", "", "name of env var holding the API key (never the key itself)")
 	fs.StringVar(&cf.configPath, "config", "", "config file path")
@@ -432,8 +447,8 @@ func cmdAudit(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&target.model, "target-model", "", "target model (overrides --model)")
 	fs.StringVar(&official.model, "official-model", "", "official model (overrides --model)")
 	fs.StringVar(&bothTransport, "transport", "", "transport for both endpoints")
-	fs.StringVar(&target.transport, "target-transport", "", "target transport: openai | anthropic | gemini")
-	fs.StringVar(&official.transport, "official-transport", "", "official transport: openai | anthropic | gemini")
+	fs.StringVar(&target.transport, "target-transport", "", "target transport: openai | anthropic | gemini | responses")
+	fs.StringVar(&official.transport, "official-transport", "", "official transport: openai | anthropic | gemini | responses")
 	fs.StringVar(&target.profile, "target-profile", "", "config profile for target")
 	fs.StringVar(&official.profile, "official-profile", "", "config profile for official")
 	fs.StringVar(&bothKeyEnv, "api-key-env", "", "name of env var holding the API key for both endpoints")

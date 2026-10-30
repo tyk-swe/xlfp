@@ -1,0 +1,153 @@
+package fingerprint
+
+import "testing"
+
+func tokObsForEntry(t *testing.T, db *DB, entryID string, perturb func(i, v int) int) []TokObservation {
+	t.Helper()
+	var e *Entry
+	for i := range db.Entries {
+		if db.Entries[i].ID == entryID {
+			e = &db.Entries[i]
+		}
+	}
+	if e == nil {
+		t.Fatalf("entry %s not found", entryID)
+	}
+	var obs []TokObservation
+	for i, p := range db.Probes {
+		if p.Special {
+			continue
+		}
+		v := e.expectedDiff(i)
+		if perturb != nil {
+			v = perturb(i, v)
+		}
+		obs = append(obs, TokObservation{ProbeID: p.ID, Diff: v, HasDiff: true})
+	}
+	return obs
+}
+
+func TestTokRankExactMatch(t *testing.T) {
+	db, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := db.TokRank(tokObsForEntry(t, db, "deepseek-v3", nil), "deepseek-chat", TokParams{})
+	if res.Verdict != TokVerdictExact || res.TopFamily != "deepseek" {
+		t.Fatalf("verdict = %s family = %s, want exact/deepseek (prob %.4f)", res.Verdict, res.TopFamily, res.Probability)
+	}
+	if res.Probability < 0.9 {
+		t.Fatalf("exact probability %.4f too low", res.Probability)
+	}
+	if res.Claim == nil || res.Claim.Status != "consistent" {
+		t.Fatalf("claim = %+v, want consistent", res.Claim)
+	}
+}
+
+func TestTokRankNoisyCountsStillTopFamily(t *testing.T) {
+	db, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulated noisy upstream: every third count off by +2, one
+	// count off by -3 (boundary merges / relay miscounts).
+	obs := tokObsForEntry(t, db, "deepseek-v3", func(i, v int) int {
+		switch {
+		case i == 4:
+			return v - 3
+		case i%3 == 0:
+			return v + 2
+		default:
+			return v
+		}
+	})
+	res := db.TokRank(obs, "", TokParams{})
+	if res.TopFamily != "deepseek" || res.Verdict == TokVerdictInconclusive {
+		t.Fatalf("noisy verdict = %s family = %s prob = %.4f", res.Verdict, res.TopFamily, res.Probability)
+	}
+	if len(res.Candidates) == 0 || res.Candidates[0].Family != "deepseek" {
+		t.Fatalf("candidates = %+v", res.Candidates)
+	}
+}
+
+func TestTokRankClaimInconsistent(t *testing.T) {
+	db, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := db.TokRank(tokObsForEntry(t, db, "deepseek-v3", nil), "gpt-4o", TokParams{})
+	if res.Claim == nil || res.Claim.Status != "inconsistent" {
+		t.Fatalf("claim = %+v, want inconsistent", res.Claim)
+	}
+}
+
+func TestTokRankUnknownForUnseenTokenizer(t *testing.T) {
+	db, err := Parse([]byte(`{
+		"version":"test","note":"",
+		"probes":[
+			{"id":"a","stage":1,"text":"a"},{"id":"b","stage":1,"text":"b"},
+			{"id":"c","stage":1,"text":"c"},{"id":"d","stage":1,"text":"d"},
+			{"id":"e","stage":1,"text":"e"},{"id":"f","stage":1,"text":"f"}
+		],
+		"entries":[
+			{"id":"e1","family":"f1","display":"F1","tokenizer":"t1","verified":true,"counts":[5,9,13,17,21,25],"reject_probes":[],"aliases":[]},
+			{"id":"e2","family":"f2","display":"F2","tokenizer":"t2","verified":true,"counts":[6,10,14,18,22,26],"reject_probes":[],"aliases":[]}
+		]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Counts far from both entries on every probe: an unlisted
+	// tokenizer must win over a forced closest match.
+	ids := []string{"a", "b", "c", "d", "e", "f"}
+	var obs []TokObservation
+	for i, id := range ids {
+		obs = append(obs, TokObservation{ProbeID: id, Diff: 40 + i*3, HasDiff: true})
+	}
+	res := db.TokRank(obs, "", TokParams{})
+	if res.Verdict == TokVerdictExact {
+		t.Fatalf("unseen tokenizer rendered exact: %+v", res)
+	}
+	if res.UnlistedProb < 0.5 {
+		t.Fatalf("unlisted probability %.4f, want >= 0.5", res.UnlistedProb)
+	}
+}
+
+func TestTokRankInsufficient(t *testing.T) {
+	db, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs := tokObsForEntry(t, db, "deepseek-v3", nil)[:2]
+	res := db.TokRank(obs, "", TokParams{})
+	if res.Verdict != TokVerdictInconclusive || res.ReasonCode != TokReasonInsufficient {
+		t.Fatalf("verdict = %s code = %s, want inconclusive/insufficient_counts", res.Verdict, res.ReasonCode)
+	}
+}
+
+func TestTokSelectBatchDeterministicAndOrdinary(t *testing.T) {
+	db, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, gainA := db.TokSelectBatch(nil, 4, TokParams{})
+	b, gainB := db.TokSelectBatch(nil, 4, TokParams{})
+	if len(a) != 4 || gainA <= 0 {
+		t.Fatalf("batch = %d probes, gain %.6f", len(a), gainA)
+	}
+	if gainA != gainB {
+		t.Fatalf("non-deterministic gain %.6f vs %.6f", gainA, gainB)
+	}
+	for i := range a {
+		if a[i].ID != b[i].ID || a[i].Special {
+			t.Fatalf("batch mismatch or special probe at %d: %+v", i, a[i])
+		}
+	}
+	// Used probes are never re-picked.
+	used := []TokObservation{{ProbeID: a[0].ID, Diff: 1, HasDiff: true}}
+	c, _ := db.TokSelectBatch(used, 4, TokParams{})
+	for _, p := range c {
+		if p.ID == a[0].ID {
+			t.Fatalf("re-picked used probe %s", p.ID)
+		}
+	}
+}

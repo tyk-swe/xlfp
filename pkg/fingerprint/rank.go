@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 )
 
 // Result statuses for uncover-style fingerprinting.
@@ -297,13 +298,13 @@ func (db *DB) Rank(obs []Observation, minConfidence float64) Result {
 	}
 	obsRange, expRange := obsMax-obsMin, expMax-expMin
 	degenerate := (expRange >= 6 && obsRange <= math.Max(1, expRange/4)) || (expRange >= 10 && obsRange < expRange/2)
-	sharedTie := ""
+	sharedTie := []string{top.Family}
 	for _, r := range res.Rankings[1:] {
 		if contains(top.SharedWith, r.Family) {
-			sharedTie = r.Family
-			break
+			sharedTie = append(sharedTie, r.Family)
 		}
 	}
+	sort.Strings(sharedTie)
 	unverifiedBetter := len(res.Unverified) > 0 && res.Unverified[0].MAE <= MaxVerdictMAE && res.Unverified[0].MAE+1.0 < top.MAE
 	topScore := best[top.Family]
 	setReason := func(code, reason string) { res.ReasonCode, res.Reason = code, reason }
@@ -324,8 +325,8 @@ func (db *DB) Rank(obs []Observation, minConfidence float64) Result {
 			reason += fmt.Sprintf("; closest overall match is unverified family %s (MAE %.2f), which cannot be rendered as a verdict", res.Unverified[0].Family, res.Unverified[0].MAE)
 		}
 		setReason(ReasonPoorFit, reason)
-	case sharedTie != "":
-		setReason(ReasonSharedTokenizer, fmt.Sprintf("families %s and %s share an identical tokenizer and cannot be separated by token counts", top.Family, sharedTie))
+	case len(sharedTie) > 1:
+		setReason(ReasonSharedTokenizer, fmt.Sprintf("families %s share an identical tokenizer and cannot be separated by token counts", strings.Join(sharedTie, ", ")))
 	case unverifiedBetter:
 		setReason(ReasonUnverifiedBest, fmt.Sprintf("closest overall match is unverified family %s (MAE %.2f), ahead of verified %s (MAE %.2f); unverified families cannot be rendered as verdicts", res.Unverified[0].Family, res.Unverified[0].MAE, top.Family, top.MAE))
 	case top.Confidence < minConfidence:

@@ -15,7 +15,7 @@ check a provider's claimed family, or add a diagnostic to an agent workflow.
 - **OpenCode stealth testing:** `opencode` runs probes through the installed
   OpenCode client, using its login and structured token usage.
 - **Evidence with limits:** verified candidates include DeepSeek, Qwen,
-  OpenAI, Mistral, GLM, and MiMo. Ambiguous or unreliable evidence can
+  OpenAI, Mistral, GLM, MiMo, and Kimi. Ambiguous or unreliable evidence can
   produce `INCONCLUSIVE` rather than a guess.
 
 [Get started](#your-first-check-2-minutes) · [Check a claim](#check-a-providers-claim-audit) · [How it works](./docs/how-it-works.md) · [What's new in 0.1.6](./CHANGELOG.md)
@@ -28,6 +28,7 @@ What it can tell you:
 What it can't:
 
 - The exact model version. Token counts can't prove that.
+- Separate Qwen2.5, MiMo-7B, and Kimi-Dev, which share a tokenizer.
 - Whether a same-family model was secretly shrunk or degraded.
 - Authenticate provider-reported token counts. Missing or implausible
   counts can be rejected, but deliberately forged counts that match a
@@ -190,6 +191,26 @@ with `--json` or `--verbose` and rerun if probing stopped early; do not
 treat a failed baseline as corroboration. A fix is pending in
 [PR #3](https://github.com/tyk-swe/xlfp/pull/3).
 
+### Two more detectors: `tokprobe` and `numbers`
+
+`xlfp tokprobe` identifies the upstream tokenizer a second way:
+wrapped probes minus a wrapper-only baseline (hidden template
+tokens cancel exactly), a Bayesian open-set verdict
+(`exact` / `related` / `unknown` for unlisted tokenizers), and a
+claim check against the model name. `xlfp numbers` adds a
+behavioral signal that needs no token counts: the model writes a
+few hundred first-instinct integers, and its value preferences are
+ranked against a reference bank you collect yourself with
+`xlfp sample` → `xlfp enroll` → `xlfp retrain` from official
+endpoints (the embedded bank ships empty, so expect
+`insufficient_bank` until then). `xlfp numbers --input FILE`
+re-scores saved or pasted replies offline. Both are reported
+separately from the classic fingerprint and never merged into one
+confidence; details and limits are in
+[How it works](./docs/how-it-works.md). The implementations are
+clean-room, from published concepts only — see
+[docs/clean-room.md](./docs/clean-room.md).
+
 ### Exit codes
 
 | Code | Meaning |
@@ -254,5 +275,5 @@ GPL-3.0-only — Copyright (C) 2026 tyk-swe. See
 [LICENSE](./LICENSE). Tokenizer-data provenance and third-party
 notices are in [NOTICE.md](./NOTICE.md). This is an independent
 project, not affiliated with or endorsed by OpenAI, Anthropic,
-Google, Alibaba, DeepSeek, Mistral AI, Zhipu AI, or Xiaomi; their
-names identify the tokenizers and endpoints being measured.
+Google, Alibaba, DeepSeek, Mistral AI, Zhipu AI, Xiaomi, or Moonshot AI;
+their names identify the tokenizers and endpoints being measured.
