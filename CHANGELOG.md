@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.1.7
+
+- Add Kimi K2/K3 and Kimi-Dev tokenizer entries. Preserve ambiguity
+  for tokenizers shared with Qwen2.5 and MiMo-7B.
 
 - Add `xlfp tokprobe`: differential (wrapper-minus-baseline) token
   counts with a Bayesian open-set verdict (exact / related /
@@ -15,7 +18,8 @@
   `insufficient_bank` until samples are collected.
 - Add the bank pipeline `xlfp sample` / `xlfp enroll` /
   `xlfp retrain` (fixed 36-challenge sampling set, validated
-  enrollment, leave-one-out fitted limits and calibration), plus
+  enrollment, leave-one-out evaluation, and held-out three-answer
+  confidence calibration), plus
   `tools/train_numprint.py` for optional LDA parameters.
 - Add streaming (SSE) reply capture and the OpenAI Responses
   transport (`--transport responses`) to the probe client, with
@@ -23,6 +27,19 @@
   commands. Key-safety rules are unchanged.
 - The two new signals are an independent clean-room implementation
   from published concepts; see docs/clean-room.md.
+- Redact echoed API keys from captured replies, including streaming
+  and partial replies. Decode multiline SSE events and exclude Gemini
+  thought parts from answer evidence.
+- Preserve completion and truncation flags during sampling and offline
+  replay; accept pasted numeric arrays. Streaming waits for complete
+  integers, and signed tokens cannot count as positive evidence.
+- Give independent sampling batches distinct sample IDs. Retain
+  collection settings and reject incompatible resumes; invalidate fitted
+  parameters after enrollment and handle zero-scatter LDA training.
+- Keep tokenizer verdicts inconclusive for untrustworthy counts or tied
+  related hypotheses. Use consistent evidence lengths and tie-breaking
+  in number scoring, training, and evaluation; leave confidence unset
+  when held-out calibration cannot improve on uniform chance.
 
 ## 0.1.6
 
