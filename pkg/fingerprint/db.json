@@ -1,5 +1,5 @@
 {
- "version": "1.0.0",
+ "version": "1.1.0",
  "note": "Raw-text counts; ranking fits a constant chat-template overhead per endpoint. verified=false entries are scored for display but never rendered as verdicts.",
  "probes": [
   {
@@ -263,6 +263,60 @@
    "aliases": [
     "mimo",
     "xiaomi"
+   ]
+  },
+  {
+   "id": "kimi-k2",
+   "family": "kimi",
+   "display": "Kimi",
+   "tokenizer": "Kimi K2/K3 tiktoken-format BPE",
+   "verified": true,
+   "source": "moonshotai/Kimi-K2-Instruct tiktoken.model and tokenization_kimi.py",
+   "counts": [
+    20,
+    13,
+    26,
+    26,
+    20,
+    28,
+    10,
+    24,
+    8,
+    2,
+    14,
+    18
+   ],
+   "reject_probes": [],
+   "aliases": [
+    "kimi",
+    "moonshot"
+   ]
+  },
+  {
+   "id": "kimi-dev",
+   "family": "kimi",
+   "display": "Kimi",
+   "tokenizer": "Kimi-Dev BPE (Qwen2.5)",
+   "verified": true,
+   "source": "moonshotai/Kimi-Dev-72B tokenizer.json",
+   "counts": [
+    20,
+    16,
+    54,
+    17,
+    20,
+    18,
+    10,
+    21,
+    8,
+    2,
+    5,
+    18
+   ],
+   "reject_probes": [],
+   "aliases": [
+    "kimi",
+    "moonshot"
    ]
   },
   {

@@ -1,0 +1,8 @@
+{
+  "version": "0.1.0",
+  "note": "No reference samples collected yet. Number-fingerprint verdicts stay inconclusive (insufficient_bank) until samples are collected with `xlfp sample`, enrolled with `xlfp enroll`, and fitted with `xlfp retrain`. See docs/clean-room.md.",
+  "entries": [],
+  "params": {
+    "seq_limits": {"autocorr": -0.1, "small_step": 0.08, "fitted": false}
+  }
+}

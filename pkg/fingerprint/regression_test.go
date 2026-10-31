@@ -3,6 +3,7 @@ package fingerprint
 import (
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -46,13 +47,24 @@ func TestRankDoesNotUseFailedObservations(t *testing.T) {
 func TestSharedTokenizerCannotBeSeparatedBySpecialPolicy(t *testing.T) {
 	db := loadDB(t)
 	for i := range db.Entries {
-		if db.Entries[i].Family == "mimo" {
+		if db.Entries[i].Family == "mimo" || db.Entries[i].ID == "kimi-dev" {
 			db.Entries[i].RejectProbes = []string{"special_a", "special_b"}
 		}
 	}
 	obs := observationsFor(db, entryByID(t, db, "qwen25"), 5)
-	if res := db.Rank(obs, 0.01); res.Status != StatusInconclusive || res.ReasonCode != ReasonSharedTokenizer {
+	for i := range obs {
+		if obs[i].ProbeID == "special_a" {
+			obs[i] = Observation{ProbeID: "special_a", Rejected: true, HTTPStatus: 400}
+		}
+	}
+	res := db.Rank(obs, 0.01)
+	if res.Status != StatusInconclusive || res.ReasonCode != ReasonSharedTokenizer {
 		t.Fatalf("server special-token policy broke tokenizer tie: %s %s", res.Status, res.ReasonCode)
+	}
+	for _, family := range []string{"kimi", "mimo", "qwen"} {
+		if !strings.Contains(res.Reason, family) {
+			t.Errorf("shared-tokenizer reason omits %s: %q", family, res.Reason)
+		}
 	}
 }
 

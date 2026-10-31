@@ -84,6 +84,11 @@ func TestFamiliesAndVersion(t *testing.T) {
 	if code != exitOK || !strings.Contains(out, "deepseek-v3") {
 		t.Fatalf("families: code %d out %q", code, out)
 	}
+	for _, id := range []string{"kimi-k2", "kimi-dev"} {
+		if !strings.Contains(out, id) {
+			t.Errorf("families output omits %s: %q", id, out)
+		}
+	}
 	code, out, _ = runCLI(t, "version")
 	if code != exitOK || !strings.Contains(out, "xlfp") {
 		t.Fatalf("version: code %d out %q", code, out)
@@ -163,6 +168,57 @@ func TestAuditMatchMismatchInconclusive(t *testing.T) {
 	}
 	if code, _, _ = runCLI(t, "audit", "--target-url", srv.URL, "--model", "mystery-1"); code != exitError {
 		t.Fatalf("uninferable claim should be a usage error, code %d", code)
+	}
+}
+
+func TestKimiAuditAndSharedTokenizer(t *testing.T) {
+	cleanEnv(t)
+	k2 := openAIStyleMock(t, "kimi-k2", 6)
+	for _, args := range [][]string{
+		{"audit", "--target-url", k2.URL, "--model", "moonshotai/Kimi-K2-Instruct"},
+		{"audit", "--target-url", k2.URL, "--model", "unknown", "--claim", "moonshot"},
+	} {
+		code, out, errOut := runCLI(t, args...)
+		if code != exitOK || !strings.Contains(out, "MATCH") || !strings.Contains(out, "kimi") {
+			t.Errorf("Kimi match: code %d stdout %q stderr %q", code, out, errOut)
+		}
+	}
+	code, out, errOut := runCLI(t, "audit", "--target-url", k2.URL, "--model", "kimi-k2", "--claim", "deepseek")
+	if code != exitMismatch || !strings.Contains(out, "MISMATCH") {
+		t.Errorf("Kimi mismatch: code %d stdout %q stderr %q", code, out, errOut)
+	}
+
+	dev := openAIStyleMock(t, "kimi-dev", 6)
+	code, out, errOut = runCLI(t, "audit", "--target-url", dev.URL, "--model", "Kimi-Dev-72B")
+	if code != exitInconclusive || !strings.Contains(out, "INCONCLUSIVE") {
+		t.Errorf("Kimi-Dev audit: code %d stdout %q stderr %q", code, out, errOut)
+	}
+	for _, name := range []string{"Kimi", "Qwen", "MiMo"} {
+		if !strings.Contains(out, name) {
+			t.Errorf("shared-tokenizer report omits %s: %q", name, out)
+		}
+	}
+	if strings.Contains(out, "these two") {
+		t.Errorf("three-way tie described as two: %q", out)
+	}
+	code, out, errOut = runCLI(t, "uncover", "--endpoint", dev.URL, "--model", "stealth", "--json")
+	var res fingerprint.Result
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("uncover JSON: %v, output %q", err, out)
+	}
+	if code != exitInconclusive || res.ReasonCode != fingerprint.ReasonSharedTokenizer {
+		t.Fatalf("shared-tokenizer JSON: code %d reason %q stderr %q", code, res.ReasonCode, errOut)
+	}
+	for _, family := range []string{"kimi", "mimo", "qwen"} {
+		found := false
+		for _, rank := range res.Rankings {
+			if rank.Family == family && len(rank.SharedWith) == 2 {
+				found = true
+			}
+		}
+		if !found || !strings.Contains(res.Reason, family) {
+			t.Errorf("JSON does not show %s in shared tie: %+v", family, res)
+		}
 	}
 }
 

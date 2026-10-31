@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -30,12 +31,13 @@ type Client struct {
 	URL      string // fully built request URL (no key in it, ever)
 	requests int
 	altShape bool // OpenAI token-cap shape the endpoint accepted last
+	mu       sync.Mutex
 }
 
 // New builds a probing client for a resolved endpoint spec.
 func New(spec config.EndpointSpec, timeout time.Duration) (*Client, error) {
 	if !config.ValidTransport(spec.Transport) {
-		return nil, fmt.Errorf("unsupported transport %q (want openai, anthropic, or gemini)", spec.Transport)
+		return nil, fmt.Errorf("unsupported transport %q (want openai, anthropic, gemini, or responses)", spec.Transport)
 	}
 	u, err := BuildURL(spec)
 	if err != nil {
@@ -65,7 +67,17 @@ func New(spec config.EndpointSpec, timeout time.Duration) (*Client, error) {
 }
 
 // Requests returns how many HTTP requests this client has sent.
-func (c *Client) Requests() int { return c.requests }
+func (c *Client) Requests() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.requests
+}
+
+func (c *Client) bumpRequests() {
+	c.mu.Lock()
+	c.requests++
+	c.mu.Unlock()
+}
 
 // sanitizedEndpoint renders an endpoint for error messages with userinfo,
 // query, and fragment (all of which can carry keys) removed.
@@ -162,6 +174,12 @@ func BuildURL(spec config.EndpointSpec) (string, error) {
 		} else {
 			path = joinResource(path, "v1", "messages")
 		}
+	case config.TransportResponses:
+		if strings.HasSuffix(lower, "/chat/completions") {
+			path = path[:len(path)-len("/chat/completions")] + "/responses"
+		} else {
+			path = joinResource(path, "v1", "responses")
+		}
 	case config.TransportGemini:
 		if strings.Contains(lower, ":streamgeneratecontent") {
 			return "", fmt.Errorf("invalid endpoint %s: streaming Gemini URLs are not supported; use the base URL", sanitizedEndpoint(raw))
@@ -218,6 +236,51 @@ func (c *Client) isAzureHost() bool {
 	}
 	h := strings.ToLower(u.Hostname())
 	return strings.HasSuffix(h, ".openai.azure.com") || strings.HasSuffix(h, ".cognitiveservices.azure.com") || strings.HasSuffix(h, ".services.ai.azure.com")
+}
+
+// setHeaders applies the transport's auth and content headers. The
+// key travels only in a header, never in the URL.
+func (c *Client) setHeaders(req *http.Request, stream bool) {
+	req.Header.Set("Content-Type", "application/json")
+	if stream {
+		req.Header.Set("Accept", "text/event-stream")
+	} else {
+		req.Header.Set("Accept", "application/json")
+	}
+	req.Header.Set("User-Agent", "xlfp/0.1 (+https://github.com/tyk-swe/xlfp)")
+	switch c.Spec.Transport {
+	case config.TransportAnthropic:
+		req.Header.Set("anthropic-version", "2023-06-01")
+		if c.Spec.APIKey != "" {
+			req.Header.Set("x-api-key", c.Spec.APIKey)
+		}
+	case config.TransportGemini:
+		if c.Spec.APIKey != "" {
+			req.Header.Set("x-goog-api-key", c.Spec.APIKey)
+		}
+	default:
+		if c.Spec.APIKey != "" {
+			if c.isAzureHost() {
+				req.Header.Set("api-key", c.Spec.APIKey)
+			} else {
+				req.Header.Set("Authorization", "Bearer "+c.Spec.APIKey)
+			}
+		}
+	}
+}
+
+// reasoningShapeModel reports whether a model name looks like a
+// reasoning-class OpenAI model that wants max_completion_tokens and
+// no explicit temperature.
+func reasoningShapeModel(model string, flip bool) bool {
+	m := strings.ToLower(model)
+	base := m[strings.LastIndex(m, "/")+1:]
+	shape := strings.HasPrefix(base, "gpt-5") || strings.HasPrefix(base, "o1") ||
+		strings.HasPrefix(base, "o3") || strings.HasPrefix(base, "o4")
+	if flip {
+		return !shape
+	}
+	return shape
 }
 
 func transientStatus(code int) bool {
@@ -306,29 +369,8 @@ func (c *Client) sendOnce(ctx context.Context, p fingerprint.Probe, altShape boo
 	if err != nil {
 		return fingerprint.Observation{}, nil, nil, fmt.Errorf("probe %s: %s", p.ID, c.safeErr(err))
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "xlfp/0.1 (+https://github.com/tyk-swe/xlfp)")
-	switch c.Spec.Transport {
-	case config.TransportAnthropic:
-		req.Header.Set("anthropic-version", "2023-06-01")
-		if c.Spec.APIKey != "" {
-			req.Header.Set("x-api-key", c.Spec.APIKey)
-		}
-	case config.TransportGemini:
-		if c.Spec.APIKey != "" {
-			req.Header.Set("x-goog-api-key", c.Spec.APIKey)
-		}
-	default:
-		if c.Spec.APIKey != "" {
-			if c.isAzureHost() {
-				req.Header.Set("api-key", c.Spec.APIKey)
-			} else {
-				req.Header.Set("Authorization", "Bearer "+c.Spec.APIKey)
-			}
-		}
-	}
-	c.requests++
+	c.setHeaders(req, false)
+	c.bumpRequests()
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return fingerprint.Observation{}, nil, nil, fmt.Errorf("probe %s: %s", p.ID, c.safeErr(err))
@@ -477,6 +519,10 @@ func (c *Client) requestBody(text string, altShape bool) ([]byte, error) {
 			"contents":         []map[string]any{{"role": "user", "parts": []map[string]any{{"text": text}}}},
 			"generationConfig": map[string]any{"maxOutputTokens": 1, "temperature": 0},
 		})
+	case config.TransportResponses:
+		return json.Marshal(map[string]any{
+			"model": c.Spec.Model, "input": text, "max_output_tokens": 16,
+		})
 	default:
 		body := map[string]any{
 			"model":    c.Spec.Model,
@@ -486,13 +532,7 @@ func (c *Client) requestBody(text string, altShape bool) ([]byte, error) {
 		// and non-default temperature; classic chat models and most
 		// compatible providers expect max_tokens. Prompt-token counts do
 		// not depend on either choice.
-		m := strings.ToLower(c.Spec.Model)
-		base := m[strings.LastIndex(m, "/")+1:]
-		reasoningShape := strings.HasPrefix(base, "gpt-5") || strings.HasPrefix(base, "o1") ||
-			strings.HasPrefix(base, "o3") || strings.HasPrefix(base, "o4")
-		if altShape {
-			reasoningShape = !reasoningShape
-		}
+		reasoningShape := reasoningShapeModel(c.Spec.Model, altShape)
 		if reasoningShape {
 			body["max_completion_tokens"] = 1
 		} else {

@@ -2,6 +2,7 @@ package fingerprint
 
 import (
 	"math"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -38,7 +39,7 @@ func observationsFor(db *DB, e Entry, overhead int) []Observation {
 
 func TestDBLoadAndFamilies(t *testing.T) {
 	db := loadDB(t)
-	want := map[string]bool{"openai": true, "qwen": true, "deepseek": true, "mistral": true, "glm": true, "mimo": true, "google": true, "claude": true}
+	want := map[string]bool{"openai": true, "qwen": true, "deepseek": true, "mistral": true, "glm": true, "mimo": true, "kimi": true, "google": true, "claude": true}
 	for _, f := range db.Families() {
 		delete(want, f)
 	}
@@ -81,10 +82,51 @@ func TestDBSpotCounts(t *testing.T) {
 			t.Errorf("%s %s = %d, want %d", c.entry, c.probe, got, c.want)
 		}
 	}
-	// Qwen and MiMo ship a byte-identical tokenizer.json.
+	// Qwen, MiMo, and Kimi-Dev ship a byte-identical tokenizer.json.
 	q, m := entryByID(t, db, "qwen25"), entryByID(t, db, "mimo-7b")
 	if !q.sameCounts(m) {
 		t.Error("qwen/mimo count vectors diverged; re-verify the shared-tokenizer assumption")
+	}
+}
+
+func TestKimiTokenizerCountsAndAliases(t *testing.T) {
+	db := loadDB(t)
+	if !db.IsVerified("kimi") {
+		t.Fatal("kimi must be source-verified")
+	}
+	k2 := entryByID(t, db, "kimi-k2")
+	want := []int{20, 13, 26, 26, 20, 28, 10, 24, 8, 2, 14, 18}
+	if !slices.Equal(k2.Counts, want) {
+		t.Fatalf("Kimi K2 counts = %v, want %v", k2.Counts, want)
+	}
+	dev := entryByID(t, db, "kimi-dev")
+	for _, id := range []string{"qwen25", "mimo-7b"} {
+		if !dev.sameCounts(entryByID(t, db, id)) {
+			t.Errorf("Kimi-Dev counts differ from %s", id)
+		}
+	}
+	for _, alias := range []string{"kimi", "KIMI", "moonshot", "Moonshot"} {
+		if got := db.NormalizeFamily(alias); got != "kimi" {
+			t.Errorf("NormalizeFamily(%q) = %q, want kimi", alias, got)
+		}
+	}
+	for _, model := range []string{"Kimi-K2-Instruct", "moonshotai/Kimi-K3", "Kimi-Dev-72B", "moonshot-v1-8k"} {
+		if got := db.FamilyForModel(model); got != "kimi" {
+			t.Errorf("FamilyForModel(%q) = %q, want kimi", model, got)
+		}
+	}
+}
+
+func TestRankKimiAndDeepSeekWithOverhead(t *testing.T) {
+	db := loadDB(t)
+	for _, c := range []struct{ id, family string }{{"kimi-k2", "kimi"}, {"deepseek-v3", "deepseek"}} {
+		obs := observationsFor(db, entryByID(t, db, c.id), 7)
+		for _, n := range []int{8, len(obs)} {
+			res := db.Rank(obs[:n], 0)
+			if res.Status != StatusIdentified || res.TopFamily != c.family || !res.ShouldStop() {
+				t.Errorf("%s with %d observations: %s/%q reason %q", c.id, n, res.Status, res.TopFamily, res.Reason)
+			}
+		}
 	}
 }
 
@@ -119,20 +161,27 @@ func TestRankSharedTokenizerTieIsInconclusive(t *testing.T) {
 	db := loadDB(t)
 	e := entryByID(t, db, "qwen25")
 	res := db.Rank(observationsFor(db, e, 3), 0)
-	if res.Status == StatusIdentified {
-		t.Fatalf("qwen/mimo shared tokenizer must not identify a single family, got %q", res.TopFamily)
+	if res.Status != StatusInconclusive || res.ReasonCode != ReasonSharedTokenizer {
+		t.Fatalf("shared tokenizer: status %s reason %q", res.Status, res.Reason)
 	}
 	if !strings.Contains(res.Reason, "share an identical tokenizer") {
 		t.Fatalf("reason should explain the tie, got %q", res.Reason)
 	}
-	var shared []string
-	for _, r := range res.Rankings {
-		if r.Family == "qwen" {
-			shared = r.SharedWith
+	for _, family := range []string{"kimi", "mimo", "qwen"} {
+		if !strings.Contains(res.Reason, family) {
+			t.Errorf("reason %q omits %s", res.Reason, family)
 		}
 	}
-	if len(shared) != 1 || shared[0] != "mimo" {
-		t.Fatalf("qwen SharedWith = %v, want [mimo]", shared)
+	shared := map[string][]string{}
+	for _, r := range res.Rankings {
+		shared[r.Family] = r.SharedWith
+	}
+	for family, want := range map[string][]string{
+		"kimi": {"mimo", "qwen"}, "mimo": {"kimi", "qwen"}, "qwen": {"kimi", "mimo"},
+	} {
+		if !slices.Equal(shared[family], want) {
+			t.Errorf("%s SharedWith = %v, want %v", family, shared[family], want)
+		}
 	}
 }
 
@@ -301,7 +350,7 @@ func TestRankReasonCodes(t *testing.T) {
 		t.Fatalf("constant counts: status %s code %q reason %q", res.Status, res.ReasonCode, res.Reason)
 	}
 
-	// Qwen and MiMo share one tokenizer byte-for-byte: a tie, not a guess.
+	// Qwen, MiMo, and Kimi-Dev share one tokenizer: a tie, not a guess.
 	res = db.Rank(observationsFor(db, entryByID(t, db, "qwen25"), 6), 0)
 	if res.Status != StatusInconclusive || res.ReasonCode != ReasonSharedTokenizer {
 		t.Fatalf("qwen tie: status %s code %q reason %q", res.Status, res.ReasonCode, res.Reason)

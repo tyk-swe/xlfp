@@ -38,10 +38,12 @@ HF = {
     "deepseek": ("deepseek-ai/DeepSeek-V3", "tokenizer.json", "e815299b0bcbac849fa540c768ef21845365c9eb", "621ac2e32d0dba658404412318818aaa8ce8cda492e59830109d8da6b517fb41"),
     "mistral": ("mistralai/Mistral-7B-Instruct-v0.3", "tokenizer.json", "c170c708c41dac9275d15a8fff4eca08d52bab71", "e553af6fff7d7ad76e830608b218c5c0b0822998d5a1a96099a74cd3c1cb1a49"),
     "mimo": ("XiaomiMiMo/MiMo-7B-Base", "tokenizer.json", "c72df4586cb8bdeebd65f36929cd3385a6566fbe", "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539"),
+    "kimi_dev": ("moonshotai/Kimi-Dev-72B", "tokenizer.json", "8791d7981945752a51f692d66f2bbfb3573c9722", "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539"),
     "claude": ("Xenova/claude-tokenizer", "tokenizer.json", "cae688821ea05490de49a6d3faa36468a4672fad", "c241737df24b4e7f7c9af4fdcee29a0ca903dcb288a8b753bc346a3092911767"),
     "google": ("Xenova/gemma-tokenizer", "tokenizer.json", "fbc8c39d11899b177f1fe8f1d25bd25fbee66fad", "05e97791a5e007260de1db7e1692e53150e08cea481e2bf25435553380c147ee"),
 }
 GLM = ("THUDM/glm-4-9b-chat", "tokenizer.model", "bd8234fe5e0c09c48637a92abb0c797cb5fa0e73", "5a493598071550244b2ee7f26118f3edec2150b9dfa967929a99052ac83fe716")
+KIMI = ("moonshotai/Kimi-K2-Instruct", "tiktoken.model", "fd1984e2b7a3350dbf7305fe73a4ede25c14de50", "b6c497a7469b33ced9c38afb1ad6e47f03f5e5dc05f15930799210ec050c5103")
 
 
 def pinned_download(repo, fname, revision, sha256):
@@ -63,21 +65,40 @@ def tiktoken_counts(name):
     return [len(enc.encode(p["text"], disallowed_special=())) for p in PROBES]
 
 
-def glm_counts():
-    # GLM-4 ships a tiktoken rank file named tokenizer.model (see
-    # tokenization_chatglm.py in THUDM/glm-4-9b-chat).
+def tiktoken_bpe_counts(spec, name, pat):
     import base64
 
-    path = pinned_download(*GLM)
+    path = pinned_download(*spec)
     ranks = {}
     with open(path, encoding="utf-8") as f:
         for line in f:
             parts = line.strip().split()
             if len(parts) == 2:
                 ranks[base64.b64decode(parts[0])] = int(parts[1])
-    pat = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"
-    enc = tiktoken.Encoding(name="glm4", pat_str=pat, mergeable_ranks=ranks, special_tokens={})
+    enc = tiktoken.Encoding(name=name, pat_str=pat, mergeable_ranks=ranks, special_tokens={})
     return [len(enc.encode(p["text"])) for p in PROBES]
+
+
+def glm_counts():
+    # GLM-4 ships a tiktoken rank file named tokenizer.model (see
+    # tokenization_chatglm.py in THUDM/glm-4-9b-chat).
+    pat = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"
+    return tiktoken_bpe_counts(GLM, "glm4", pat)
+
+
+def kimi_counts():
+    # Match pat_str from the pinned Kimi-K2-Instruct tokenization_kimi.py.
+    pat = "|".join([
+        r"""[\p{Han}]+""",
+        r"""[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?""",
+        r"""[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?""",
+        r"""\p{N}{1,3}""",
+        r""" ?[^\s\p{L}\p{N}]+[\r\n]*""",
+        r"""\s*[\r\n]+""",
+        r"""\s+(?!\S)""",
+        r"""\s+""",
+    ])
+    return tiktoken_bpe_counts(KIMI, "kimi-k2", pat)
 
 
 def entry(eid, family, display, tokenizer, verified, source, counts, reject=None, aliases=None):
@@ -117,6 +138,12 @@ def main():
         entry("mimo-7b", "mimo", "MiMo", "MiMo-7B BPE", True,
               "XiaomiMiMo/MiMo-7B-Base tokenizer.json", hf_counts(HF["mimo"]),
               aliases=["mimo", "xiaomi"]),
+        entry("kimi-k2", "kimi", "Kimi", "Kimi K2/K3 tiktoken-format BPE", True,
+              "moonshotai/Kimi-K2-Instruct tiktoken.model and tokenization_kimi.py", kimi_counts(),
+              aliases=["kimi", "moonshot"]),
+        entry("kimi-dev", "kimi", "Kimi", "Kimi-Dev BPE (Qwen2.5)", True,
+              "moonshotai/Kimi-Dev-72B tokenizer.json", hf_counts(HF["kimi_dev"]),
+              aliases=["kimi", "moonshot"]),
         entry("google-gemma-sp", "google", "Google", "Gemma SentencePiece (Gemini proxy)", False,
               "Xenova/gemma-tokenizer tokenizer.json (community conversion; Gemini server tokenizer is closed)",
               hf_counts(HF["google"]), aliases=["gemini", "gemma", "google"]),
@@ -125,7 +152,7 @@ def main():
               hf_counts(HF["claude"]), aliases=["claude", "anthropic", "sonnet", "opus", "haiku"]),
     ]
     db = {
-        "version": "1.0.0",
+        "version": "1.1.0",
         "note": "Raw-text counts; ranking fits a constant chat-template overhead per endpoint. "
                 "verified=false entries are scored for display but never rendered as verdicts.",
         "probes": PROBES,

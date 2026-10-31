@@ -48,6 +48,7 @@ class GeneratorTests(unittest.TestCase):
         with mock.patch.object(self.generator, "tiktoken_counts", return_value=counts), \
              mock.patch.object(self.generator, "hf_counts", return_value=counts), \
              mock.patch.object(self.generator, "glm_counts", return_value=counts), \
+             mock.patch.object(self.generator, "kimi_counts", return_value=counts), \
              mock.patch.object(pathlib.Path, "write_text", autospec=True) as write, \
              contextlib.redirect_stdout(io.StringIO()):
             self.generator.main()

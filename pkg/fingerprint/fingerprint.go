@@ -24,13 +24,18 @@ type Probe struct {
 // Entry is one tokenizer variant in the database. Several entries may share
 // a Family (e.g. OpenAI publishes multiple encodings).
 type Entry struct {
-	ID           string   `json:"id"`
-	Family       string   `json:"family"`
-	Display      string   `json:"display"`
-	Tokenizer    string   `json:"tokenizer"`
-	Verified     bool     `json:"verified"`
-	Source       string   `json:"source"`
-	Counts       []int    `json:"counts"` // one raw-text count per probe, in probe order
+	ID        string `json:"id"`
+	Family    string `json:"family"`
+	Display   string `json:"display"`
+	Tokenizer string `json:"tokenizer"`
+	Verified  bool   `json:"verified"`
+	Source    string `json:"source"`
+	Counts    []int  `json:"counts"` // one raw-text count per probe, in probe order
+	// DiffCounts optionally holds expected differential counts
+	// (wrapped probe minus wrapper-only baseline) for the tokenizer
+	// probe; when absent, Counts is used as the expectation and
+	// boundary merges are absorbed by the noise model.
+	DiffCounts   []int    `json:"diff_counts,omitempty"`
 	RejectProbes []string `json:"reject_probes"`
 	Aliases      []string `json:"aliases"`
 }
@@ -97,6 +102,9 @@ func (db *DB) Validate() error {
 			if c <= 0 {
 				return fmt.Errorf("fingerprint db: entry %s has non-positive count", e.ID)
 			}
+		}
+		if len(e.DiffCounts) != 0 && len(e.DiffCounts) != len(db.Probes) {
+			return fmt.Errorf("fingerprint db: entry %s has %d diff counts for %d probes", e.ID, len(e.DiffCounts), len(db.Probes))
 		}
 		for _, rp := range e.RejectProbes {
 			if !seen[rp] {

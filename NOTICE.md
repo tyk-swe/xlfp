@@ -4,9 +4,9 @@
 [LICENSE](./LICENSE)). Copyright (C) 2026 tyk-swe. This project
 is an independent diagnostic tool and is **not affiliated with, endorsed
 by, or sponsored by** OpenAI, Anthropic, Google, Alibaba (Qwen),
-DeepSeek, Mistral AI, Zhipu AI (GLM), or Xiaomi (MiMo). Product and
-model names are used only to identify the tokenizers/endpoints being
-measured.
+DeepSeek, Mistral AI, Zhipu AI (GLM), Xiaomi (MiMo), or Moonshot AI
+(Kimi). Product and model names are used only to identify the
+tokenizers/endpoints being measured.
 
 ## Go dependencies
 
@@ -35,12 +35,14 @@ are shipped here.
 | Mistral v0.3 | `mistralai/Mistral-7B-Instruct-v0.3` `tokenizer.json` | `c170c708` | `e553af6f` |
 | GLM-4 | `THUDM/glm-4-9b-chat` `tokenizer.model` (tiktoken-format ranks) | `bd8234fe` | `5a493598` |
 | MiMo-7B | `XiaomiMiMo/MiMo-7B-Base` `tokenizer.json` | `c72df458` | `c0382117` |
+| Kimi K2/K3 | `moonshotai/Kimi-K2-Instruct` `tiktoken.model` (tiktoken-format ranks; pattern from `tokenization_kimi.py`) | `fd1984e2` | `b6c497a7` |
+| Kimi-Dev | `moonshotai/Kimi-Dev-72B` `tokenizer.json` | `8791d798` | `c0382117` |
 | Google (Gemma proxy, unverified) | `Xenova/gemma-tokenizer` `tokenizer.json` (community conversion) | `fbc8c39d` | `05e97791` |
 | Claude (unverified) | `Xenova/claude-tokenizer` `tokenizer.json` (community conversion) | `cae68882` | `c241737d` |
 
-Note the identical SHA-256 for the Qwen2.5 and MiMo-7B `tokenizer.json`
-files at the pinned revisions: those two families cannot be separated
-by token counting, and `xlfp` reports them as a shared-tokenizer tie.
+Note the identical SHA-256 for the Qwen2.5, MiMo-7B, and Kimi-Dev
+`tokenizer.json` files at the pinned revisions: those models cannot be
+separated by token counting, and `xlfp` reports a shared-tokenizer tie.
 
 Full revisions and hashes live in `tools/gen_db.py`, which fails closed
 on any hash mismatch.

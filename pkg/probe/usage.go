@@ -111,6 +111,15 @@ func parseUsage(transport string, raw []byte) (int, bool) {
 		if json.Unmarshal(raw, &r) == nil && r.UsageMetadata != nil && r.UsageMetadata.PromptTokenCount != nil {
 			return int(*r.UsageMetadata.PromptTokenCount), true
 		}
+	case config.TransportResponses:
+		var r struct {
+			Usage *struct {
+				InputTokens *flexInt `json:"input_tokens"`
+			} `json:"usage"`
+		}
+		if json.Unmarshal(raw, &r) == nil && r.Usage != nil && r.Usage.InputTokens != nil {
+			return int(*r.Usage.InputTokens), true
+		}
 	default:
 		var r struct {
 			Usage *struct {

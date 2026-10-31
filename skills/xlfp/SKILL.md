@@ -9,21 +9,40 @@ compatibility: Requires xlfp on PATH and network access. HTTP checks use API key
 
 `xlfp` sends up to 12 tiny probe requests to an LLM endpoint and
 matches the reported prompt-token counts against known tokenizer
-families (OpenAI, Qwen, DeepSeek, Mistral, GLM, MiMo verified;
+families (OpenAI, Qwen, DeepSeek, Mistral, GLM, MiMo, Kimi verified;
 Google/Claude scored as unverified hints). It provides these checks:
 
 - `xlfp uncover` — which family is this endpoint, really?
 - `xlfp opencode` — which family is this OpenCode stealth model, through OpenCode?
 - `xlfp audit` — does this endpoint match the family the provider claims?
+- `xlfp tokprobe` — which tokenizer counts for this endpoint, checked
+  against the model name? Differential counts with an open-set
+  verdict (`exact`|`related`|`unknown`); use it as an independent
+  second tokenizer opinion next to `uncover`, especially when
+  template overhead may be distorting the classic fit.
+- `xlfp numbers` — behavioral ranking from first-instinct integer
+  replies against a reference bank. Needs a populated bank
+  (`--bank FILE`); the embedded bank ships empty, so expect
+  `insufficient_bank` until the user collects samples
+  (`xlfp sample` → `xlfp enroll` → `xlfp retrain`, official
+  endpoints only). A numbers round costs `--count` (default 3)
+  long generations per round — much more than the tiny token
+  probes; say so before running it. Rankings are closed-set
+  within the bank and never prove an exact model; `not_model_reply`
+  means the numbers look program-generated or sorted. Offline:
+  `xlfp numbers --input FILE` re-scores saved reports, answer
+  arrays, batches, or pasted replies with zero requests — prefer
+  this when the user already has replies.
 
 Hard limits you must respect when reporting: results are
 **family-level evidence, never proof of an exact model/checkpoint**;
 audit detects family substitution only, never quantization or
-degradation; Qwen and MiMo share one tokenizer and cannot be
-separated; Google/Claude can never be verdicts. Missing or implausible
-usage yields *inconclusive*, a valid final answer, not a failure to retry
-around. Plausible fabricated counts can fool the fingerprint; confidence
-measures fit and does not authenticate a provider's reporting.
+degradation; Qwen2.5, MiMo-7B, and Kimi-Dev share one tokenizer and
+cannot be separated; Google/Claude can never be verdicts. Missing or
+implausible usage yields *inconclusive*, a valid final answer, not a
+failure to retry around. Plausible fabricated counts can fool the
+fingerprint; confidence measures fit and does not authenticate a
+provider's reporting.
 
 ## 0. Make sure xlfp exists
 
@@ -94,7 +113,16 @@ selects the executable, and `--timeout` defaults to 60s per probe.
 ## 3. Interpret
 
 Exit codes: `0` identified/match, `1` operational or usage error,
-`2` inconclusive, `3` audit mismatch.
+`2` inconclusive, `3` audit mismatch. For `tokprobe`, `0` means any
+verdict (`exact`, `related`, or `unknown` = unlisted tokenizer);
+the claim check (`claim.status`: consistent|inconsistent|unclear|
+unchecked) is reference information and does not change the exit
+code. For `numbers`, `0` means every round produced a ranking
+(candidate `confidence` exists only when `calibrated` is true —
+never quote a confidence from an uncalibrated ranking), `2` covers
+inconclusive and `not_model_reply` rounds. `numbers` reason codes:
+`insufficient_bank` (collect samples first; do not guess),
+`insufficient_answers`, `not_model_reply`.
 
 `uncover` JSON: `status` (`identified`|`inconclusive`),
 `top_family`, `rankings[]` (verified families with `confidence`),
@@ -118,7 +146,7 @@ Common `reason_code` values:
 | `insufficient_counts` | endpoint returned too little/no usage | check model/URL/key; try `--transport` for native gateways |
 | `unreliable_counts`, `scaled_counts` | usage looks estimated/fabricated | report as inconclusive-by-design; don't retry-hammer |
 | `poor_fit` | no known family matches | may be an unlisted family; show `rankings` as hints |
-| `shared_tokenizer` | tie (e.g. Qwen vs MiMo) | report both families as inseparable |
+| `shared_tokenizer` | tie (e.g. Qwen, MiMo, and Kimi-Dev) | report all tied families as inseparable |
 | `unverified_best` | closest match is Google/Claude | hint only, never a verdict |
 | `low_confidence` | evidence too close | one re-run is reasonable; audit with official baseline is stronger |
 | `unverified_claim` (audit) | claimed family can't be judged | use `uncover` for hints; no requests were spent |

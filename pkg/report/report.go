@@ -34,7 +34,7 @@ func SanitizeURL(raw string) string {
 // rankings (whose Display field is preferred).
 var familyDisplayNames = map[string]string{
 	"openai": "OpenAI", "qwen": "Qwen", "deepseek": "DeepSeek", "mistral": "Mistral",
-	"glm": "GLM", "mimo": "MiMo", "google": "Google", "claude": "Claude",
+	"glm": "GLM", "mimo": "MiMo", "kimi": "Kimi", "google": "Google", "claude": "Claude",
 }
 
 // familyLabel renders "DeepSeek (deepseek)": the readable name for humans,
@@ -164,17 +164,19 @@ func explainInconclusiveFor(w io.Writer, r fingerprint.Result, opencode bool) {
 			"Run `xlfp families` to see which families this build knows.",
 		}
 	case fingerprint.ReasonSharedTokenizer:
-		others := ""
+		var names []string
 		if len(r.Rankings) > 0 && len(r.Rankings[0].SharedWith) > 0 {
-			var names []string
+			names = append(names, topLabel)
 			for _, f := range r.Rankings[0].SharedWith {
 				names = append(names, labelFromRanks(f, r.Rankings))
 			}
-			others = strings.Join(names, ", ")
 		}
-		why = fmt.Sprintf("This endpoint matches %s — but %s uses the exact same tokenizer, so token counts genuinely cannot tell them apart. This is a real tie, not missing data.", topLabel, others)
+		why = "Multiple families share the same tokenizer, so token counts cannot tell them apart."
+		if len(names) > 0 {
+			why = fmt.Sprintf("This endpoint matches a tokenizer shared by %s, so token counts cannot tell these families apart.", strings.Join(names, ", "))
+		}
 		tries = []string{
-			"You will need other evidence (provider documentation, behavior, pricing) to separate these two.",
+			"You will need other evidence (provider documentation, behavior, pricing) to distinguish these families.",
 		}
 	case fingerprint.ReasonUnverifiedBest:
 		why = fmt.Sprintf("The closest match is %s, but xlfp cannot verify that family yet because its server-side tokenizer is not public, so it will not claim a match.", unverifiedLabel)
@@ -277,7 +279,7 @@ func writeFingerprint(w io.Writer, r fingerprint.Result, verbose, opencode bool)
 			for _, f := range top.SharedWith {
 				names = append(names, labelFromRanks(f, r.Rankings))
 			}
-			fmt.Fprintf(w, "Note: %s shares this tokenizer, so those families look identical here.\n", strings.Join(names, ", "))
+			fmt.Fprintf(w, "Note: this tokenizer is also used by %s, so those families look identical here.\n", strings.Join(names, ", "))
 		}
 	} else {
 		fmt.Fprintln(w, "Result: INCONCLUSIVE — xlfp cannot tell which family this endpoint is.")

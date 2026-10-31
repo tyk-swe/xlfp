@@ -19,7 +19,7 @@ Gemini's `/v1beta/openai`, or a full request URL. A host URL without a path gain
 the default version prefix; any non-empty path is treated as a
 complete prefix. Query parameters such as Azure's `api-version` are
 preserved, while credential query parameters and URL userinfo are
-rejected. Qwen, DeepSeek, GLM, Mistral, MiMo and OpenAI endpoints are
+rejected. Qwen, DeepSeek, GLM, Mistral, MiMo, Kimi, and OpenAI endpoints are
 normally reached through the `openai` transport. Azure OpenAI hosts
 receive the `api-key` header instead of `Authorization`.
 
