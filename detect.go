@@ -358,6 +358,15 @@ func cmdNumbers(args []string, stdout, stderr io.Writer) int {
 		}
 		report.NumbersFooter(stdout)
 	}
+	// Preserve the full report, but do not let a ranking or an inconclusive
+	// round hide a failed request elsewhere in the run.
+	for _, r := range out.Rounds {
+		for i, answer := range r.Answers {
+			if answer.Error != "" {
+				return fail(stderr, fmt.Errorf("round %d sample %d failed: %s", r.Round, i+1, cleanUI(answer.Error)))
+			}
+		}
+	}
 	for _, r := range out.Rounds {
 		if r.Result.Status != numprint.StatusRanked {
 			return exitInconclusive

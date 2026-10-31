@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.8
+
+- Report failed `numbers` requests on stderr and return operational-error
+  exit code 1, including saved failures replayed with `--input`. Preserve
+  the full JSON report, later rounds, and rankings from usable answers.
+
 ## 0.1.7
 
 - Add Kimi K2/K3 and Kimi-Dev tokenizer entries. Preserve ambiguity
