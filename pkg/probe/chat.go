@@ -32,8 +32,8 @@ type ChatRequest struct {
 }
 
 // ChatResult is the outcome of one Chat call. Error carries a
-// redacted endpoint error for non-2xx or in-body errors; transport
-// failures are returned as the Go error instead.
+// redacted endpoint error for non-2xx or in-body errors; transport and
+// response read failures are returned as the Go error instead.
 type ChatResult struct {
 	Text         string
 	PromptTokens int
@@ -84,34 +84,25 @@ func (c *Client) Chat(ctx context.Context, r ChatRequest) (res ChatResult, err e
 	}
 	defer resp.Body.Close()
 	res = ChatResult{HTTPStatus: resp.StatusCode}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
-		raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
-		switch {
-		case len(raw) > maxResponseBytes:
-			res.Error = fmt.Sprintf("HTTP %d: response exceeded size limit", resp.StatusCode)
-		case c.Spec.APIKey != "" && !json.Valid(raw):
-			res.Error = fmt.Sprintf("HTTP %d: non-JSON error body omitted", resp.StatusCode)
-		default:
-			res.Error = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, snippet([]byte(redactErrorText(string(raw), c.Spec.APIKey))))
-		}
-		return res, nil
-	}
-	if r.Stream {
+	success := resp.StatusCode >= 200 && resp.StatusCode < 300
+	if success && r.Stream {
 		return c.readChatStream(ctx, resp.Body, r, res)
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	raw, truncated, err := readResponseBody(resp.Body)
 	if err != nil {
 		return ChatResult{}, fmt.Errorf("chat: reading response: %s", c.safeErr(err))
 	}
-	if len(raw) > maxResponseBytes {
+	if !success {
+		res.Error = c.httpError(resp.StatusCode, raw, truncated)
+		return res, nil
+	}
+	if truncated {
 		res.Error = "response exceeded size limit"
 		return res, nil
 	}
 	res.Terminated = true
-	raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
 	if msg, isErr := topLevelError(raw); isErr {
-		res.Error = "endpoint error in 200 response: " + snippet([]byte(redactErrorText(msg, c.Spec.APIKey)))
+		res.Error = "endpoint error in 200 response: " + c.errorSnippet(msg)
 		return res, nil
 	}
 	res.Text = extractChatText(c.Spec.Transport, raw)
@@ -445,7 +436,7 @@ func (c *Client) readChatStream(ctx context.Context, body io.Reader, r ChatReque
 // reports whether it was the terminal event.
 func (c *Client) consumeStreamChunk(raw []byte, text *strings.Builder, res *ChatResult) (terminal bool) {
 	if msg, isErr := topLevelError(raw); isErr {
-		res.Error = "endpoint error in stream: " + snippet([]byte(redactErrorText(msg, c.Spec.APIKey)))
+		res.Error = "endpoint error in stream: " + c.errorSnippet(msg)
 		res.FinishReason = "failed"
 		return true
 	}
@@ -454,7 +445,7 @@ func (c *Client) consumeStreamChunk(raw []byte, text *strings.Builder, res *Chat
 		Message string `json:"message"`
 	}
 	if json.Unmarshal(raw, &event) == nil && event.Type == "error" {
-		res.Error = "endpoint error in stream: " + snippet([]byte(redactErrorText(event.Message, c.Spec.APIKey)))
+		res.Error = "endpoint error in stream: " + c.errorSnippet(event.Message)
 		res.FinishReason = "failed"
 		return true
 	}
@@ -531,7 +522,7 @@ func (c *Client) consumeStreamChunk(raw []byte, text *strings.Builder, res *Chat
 				if !ok {
 					msg = "response.failed"
 				}
-				res.Error = "endpoint error in stream: " + snippet([]byte(redactErrorText(msg, c.Spec.APIKey)))
+				res.Error = "endpoint error in stream: " + c.errorSnippet(msg)
 			}
 			return true
 		}

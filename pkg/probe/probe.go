@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -17,8 +16,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/tyk-swe/xlfp/pkg/config"
 	"github.com/tyk-swe/xlfp/pkg/fingerprint"
@@ -227,8 +224,6 @@ func geminiModelInPath(path string) string {
 	return seg
 }
 
-const maxResponseBytes = 4 << 20
-
 func (c *Client) isAzureHost() bool {
 	u, err := url.Parse(c.URL)
 	if err != nil {
@@ -376,32 +371,13 @@ func (c *Client) sendOnce(ctx context.Context, p fingerprint.Probe, altShape boo
 		return fingerprint.Observation{}, nil, nil, fmt.Errorf("probe %s: %s", p.ID, c.safeErr(err))
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	raw, truncated, err := readResponseBody(resp.Body)
 	if err != nil {
 		return fingerprint.Observation{}, nil, resp.Header, fmt.Errorf("probe %s: reading response: %s", p.ID, c.safeErr(err))
 	}
-	truncated := len(raw) > maxResponseBytes
-	if truncated {
-		raw = raw[:maxResponseBytes]
-	}
-	// Normalize the BOM before either error redaction or usage parsing.
-	raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
 	obs := fingerprint.Observation{ProbeID: p.ID, HTTPStatus: resp.StatusCode}
-	redact := func(s string) string {
-		return redactErrorText(s, c.Spec.APIKey)
-	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		switch {
-		case truncated:
-			// Truncation can make JSON undecodable and prevent safe redaction.
-			obs.Error = fmt.Sprintf("HTTP %d: response exceeded size limit", resp.StatusCode)
-		case c.Spec.APIKey != "" && !json.Valid(raw):
-			// Prefixes and malformed JSON can conceal an escaped key from
-			// literal replacement. Keep the status, but fail closed on the body.
-			obs.Error = fmt.Sprintf("HTTP %d: non-JSON error body omitted", resp.StatusCode)
-		default:
-			obs.Error = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, snippet([]byte(redact(string(raw)))))
-		}
+		obs.Error = c.httpError(resp.StatusCode, raw, truncated)
 		if p.Special && !truncated && !paramShapeRejected(raw) && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) {
 			obs.Rejected = true
 			obs.Error = ""
@@ -414,7 +390,7 @@ func (c *Client) sendOnce(ctx context.Context, p fingerprint.Probe, altShape boo
 		return obs, nil, resp.Header, nil
 	}
 	if msg, isErr := topLevelError(raw); isErr {
-		obs.Error = "endpoint error in 200 response: " + snippet([]byte(redact(msg)))
+		obs.Error = "endpoint error in 200 response: " + c.errorSnippet(msg)
 		return obs, raw, resp.Header, nil
 	}
 	tokens, ok := parseUsage(c.Spec.Transport, raw)
@@ -427,69 +403,6 @@ func (c *Client) sendOnce(ctx context.Context, p fingerprint.Probe, altShape boo
 		obs.Error = "response carried no prompt-token usage"
 	}
 	return obs, raw, resp.Header, nil
-}
-
-// redactErrorText decodes JSON string values and member names before
-// redacting, so escaped slashes and Unicode escapes cannot hide a key.
-// Plain-text errors retain their original format.
-func redactErrorText(s, key string) string {
-	if key == "" {
-		return s
-	}
-	redact := func(s string) string { return strings.ReplaceAll(s, key, "[redacted]") }
-	if !json.Valid([]byte(s)) {
-		return redact(s)
-	}
-	var value any
-	dec := json.NewDecoder(strings.NewReader(s))
-	dec.UseNumber()
-	if err := dec.Decode(&value); err != nil {
-		return redact(s)
-	}
-	var clean func(any) any
-	clean = func(v any) any {
-		switch v := v.(type) {
-		case string:
-			return redact(v)
-		case []any:
-			for i := range v {
-				v[i] = clean(v[i])
-			}
-		case map[string]any:
-			out := make(map[string]any, len(v))
-			for name, item := range v {
-				out[redact(name)] = clean(item)
-			}
-			return out
-		}
-		return v
-	}
-	raw, err := json.Marshal(clean(value))
-	if err != nil {
-		return "[unreadable endpoint error]"
-	}
-	return redact(string(raw))
-}
-
-// topLevelError extracts a provider error message from a 2xx JSON body.
-func topLevelError(raw []byte) (string, bool) {
-	var v struct {
-		Error json.RawMessage `json:"error"`
-	}
-	if json.Unmarshal(raw, &v) != nil || len(v.Error) == 0 || string(v.Error) == "null" {
-		return "", false
-	}
-	var obj struct {
-		Message string `json:"message"`
-	}
-	if json.Unmarshal(v.Error, &obj) == nil && obj.Message != "" {
-		return obj.Message, true
-	}
-	var s string
-	if json.Unmarshal(v.Error, &s) == nil && s != "" {
-		return s, true
-	}
-	return string(v.Error), true
 }
 
 // safeErr renders a transport error without leaking the request URL
@@ -541,26 +454,6 @@ func (c *Client) requestBody(text string, altShape bool) ([]byte, error) {
 		}
 		return json.Marshal(body)
 	}
-}
-
-func snippet(raw []byte) string {
-	s := strings.Join(strings.Fields(string(raw)), " ")
-	// Provider errors are untrusted terminal output. Keep readable Unicode,
-	// but remove escape/control characters (including OSC/CSI introducers).
-	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return -1
-		}
-		return r
-	}, s)
-	if len(s) > 200 {
-		cut := 200
-		for cut > 0 && !utf8.RuneStart(s[cut]) {
-			cut--
-		}
-		s = s[:cut] + "…"
-	}
-	return s
 }
 
 // Options controls a staged fingerprint run.
