@@ -154,8 +154,10 @@ result proves an exact model. `--rounds` repeats detection,
 `--strict` requires naturally completed answers, `--output` saves
 the full evidence, and `--input` re-scores a saved report, an
 answers array, a sampling batch, or a pasted reply offline with
-zero requests. Exit codes: 0 when every round ranked, 2 otherwise,
-1 on operational error.
+zero requests. Failed requests are reported on stderr and return exit
+code 1, including when replaying saved failures. The full report and
+usable rankings are retained. Otherwise, exit code 0 means every round
+ranked; exit code 2 means at least one round was inconclusive or rejected.
 
 Scoring, retraining, and feature export use at most the requested
 number of values from each reply, including in strict mode. The

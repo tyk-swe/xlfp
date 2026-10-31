@@ -51,7 +51,7 @@ irm https://raw.githubusercontent.com/tyk-swe/xlfp/main/install.ps1 | iex
 This downloads the right binary for your machine from the latest
 GitHub Release, verifies its SHA-256 checksum, and installs it to
 `~/.local/bin` (Windows: `%LOCALAPPDATA%\xlfp`). Set `XLFP_VERSION`
-to pin a release (e.g. `v0.1.7`) or `XLFP_INSTALL_DIR` to change the
+to pin a release (e.g. `v0.1.8`) or `XLFP_INSTALL_DIR` to change the
 destination.
 
 With Go 1.23+ you can also install or build from source:
